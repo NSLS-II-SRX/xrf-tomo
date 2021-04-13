@@ -20,7 +20,7 @@ def grab_proj(start=None, end=None):
     if (start == None):
         print('Please define a starting scan number.')
         return
-    
+
     make_hdf(start, end=end)
 
 
@@ -29,7 +29,7 @@ def read_logfile(fn, wd=None):
     # Check the working directory
     if (wd == None):
         wd = os.getcwd() + os.sep
-    
+
     df = pd.read_csv(wd+fn, sep=',')
     return df
 
@@ -59,7 +59,7 @@ def process_proj(wd=None, param_file=None, ic_name='sclr_i0', save_tiff=False):
     if (param_file == None):
         print('Automatically finding elements is not implemented yet.')
         return
-    
+
     # Create dask client
     client = dask_client_create()
 
@@ -94,7 +94,7 @@ def make_single_hdf(wd, fn, convert_theta=False):
     # Filter and sort results
     log = log[log['Use'] == 'x']
     log = log.sort_values(by=['Theta'])
-    
+
     th = log['Theta'].values
     num = log.shape[0]
 
@@ -335,15 +335,15 @@ def moving_translate_alignment():
 def get_elements(fn, ret=False, path=None):
     if (path is None):
         path = os.getcwd() + os.sep
-    
+
     with h5py.File(path+fn, 'r') as f:
         elements = list(f['/reconstruction/fitting/elements'])
-    
+
     N = len(elements)
     if (ret is False):
         for i in range(N):
             print(elements[i].decode())
-    
+
     if (ret is True):
         return (elements, N)
     else:
@@ -469,6 +469,9 @@ def align_seq(
         if debug:
             print('iter=' + str(n) + ', err=' + str(np.linalg.norm(err)))
             conv[n] = np.linalg.norm(err)
+            if np.linalg.norm(err) == 0.0:
+                print('Error has reached 0.0. Stopping iterations...')
+                break
 
         if save:
             write_tiff(prj, fdir + '/tmp/iters/prj', n)
@@ -481,13 +484,13 @@ def align_seq(
 
 
 
-def find_alignment(fn, el, path=None):
+def find_alignment(fn, el, path=None, iters=10):
     # Check path
     if (path is None):
         path = os.getcwd() + os.sep
     if (path[-1] != os.sep):
         path += os.sep
-    
+
     elements, N = get_elements(fn, ret=True, path=path)
     el_ind = -1
     for i in range(N):
@@ -497,7 +500,7 @@ def find_alignment(fn, el, path=None):
     if (el_ind == -1):
         print(f'{el} not found.')
         return
-    
+
     with h5py.File(path+fn, 'a') as f:
         proj = np.copy(f['/reconstruction/recon/proj'][:, el_ind, :, :])
         proj = np.swapaxes(proj, 1, 2)
@@ -505,7 +508,7 @@ def find_alignment(fn, el, path=None):
 
         # tomopy has an alignment method to reconstruct, back project, align, loop
         # aligned_proj, shift_y, shift_x, err = tomopy.prep.alignment.align_seq(proj, np.deg2rad(th))
-        aligned_proj, shift_y, shift_x, err = align_seq(proj, np.deg2rad(th))
+        aligned_proj, shift_y, shift_x, err = align_seq(proj, np.deg2rad(th), iters=iters)
 
         # Write shift
         try:
@@ -518,7 +521,7 @@ def find_alignment(fn, el, path=None):
         except:
             dset = f['reconstruction']['recon']['del_y']
             dset[...] = shift_y
-    
+
     return
 
 def normalize_projections(fn, path=None):
@@ -527,9 +530,9 @@ def normalize_projections(fn, path=None):
         path = os.getcwd() + os.sep
     if (path[-1] != os.sep):
         path += os.sep
-    
+
     _, N = get_elements(fn, ret=True, path=path)
-    
+
     with h5py.File(path+fn, 'a') as f:
         proj = f['/reconstruction/fitting/data']
         i0 = f['/exchange/i0']
@@ -548,7 +551,7 @@ def normalize_projections(fn, path=None):
             Inorm = I / i0
             Inorm = tomopy.misc.corr.remove_nan(Inorm, val=0)
             dset[:, i, :, :] = Inorm
-    
+
     return
 
 
@@ -558,14 +561,14 @@ def shift_projections(fn, path=None, read_only=True):
         path = os.getcwd() + os.sep
     if (path[-1] != os.sep):
         path += os.sep
-    
+
     if (read_only):
         f_str = 'r'
     else:
         f_str = 'a'
 
     _, N = get_elements(fn, ret=True, path=path)
-    
+
     with h5py.File(path+fn, f_str) as f:
         if read_only:
             proj = np.copy(f['/reconstruction/recon/proj'])
@@ -578,7 +581,7 @@ def shift_projections(fn, path=None, read_only=True):
             I = proj[:, i, :, :]
             shift_proj = tomopy.prep.alignment.shift_images(I, dx, dy)
             proj[:, i, :, :] = I
-    
+
     if (read_only):
         return proj
     else:
@@ -601,13 +604,13 @@ def find_center(fn, el, path=None):
     if (el_ind == -1):
         print(f'{el} not found.')
         return
-    
+
     with h5py.File(path+fn, 'a') as f:
         proj = np.copy(f['/reconstruction/recon/proj'])
         proj = np.squeeze(proj[:, el_ind, :, :])
         # proj = np.swapaxes(proj, 1, 2)
         th = np.deg2rad(np.copy(f['/exchange/theta']))
-    
+
         guess = proj.shape[2] / 2
         print(guess)
         rot_center = tomopy.find_center(proj, th, init=guess, ind=0, tol=0.5)
@@ -618,7 +621,7 @@ def find_center(fn, el, path=None):
         except:
             dset = f['reconstruction']['recon']['rot_center']
             dset[...] = rot_center
-    
+
     print(f'Center of rotation found at {rot_center}')
 
     return
@@ -630,7 +633,7 @@ def make_volume(fn, path=None, algorithm='gridrec'):
         path = os.getcwd() + os.sep
     if (path[-1] != os.sep):
         path += os.sep
-    
+
     elements, N = get_elements(fn, ret=True, path=path)
 
     with h5py.File(path+fn, 'a') as f:
@@ -639,7 +642,7 @@ def make_volume(fn, path=None, algorithm='gridrec'):
         th = np.deg2rad(np.copy(f['/exchange/theta']))
         rot_center = f['reconstruction/recon/rot_center']
 
-        print(f"th={th}")
+        # print(f"th={th}")
         ### need to set this up for each element... :-(
         recon_names = []
         for i in range(N):
@@ -659,7 +662,7 @@ def make_volume(fn, path=None, algorithm='gridrec'):
                 # need to make 4-D, add an axis
                 recon = np.expand_dims(recon, 0)
             recon_names.append(elements[i])
-        
+
         try:
             f.create_dataset("reconstruction/recon/volume", data=recon)
         except:
@@ -670,7 +673,7 @@ def make_volume(fn, path=None, algorithm='gridrec'):
         except:
             dset = f['reconstruction']['recon']['volume_elements']
             dset[...] = recon_names
-    
+
     return
 
 def export_tiff_projs(fn, path=None, el='all', raw=True):
@@ -691,7 +694,7 @@ def export_tiff_projs(fn, path=None, el='all', raw=True):
     if (el_ind == -1):
         print(f'{el} not found.')
         return
-    
+
     with h5py.File(path+fn, 'r') as f:
         if raw:
             proj = f['reconstruction/fitting/data']
@@ -716,7 +719,7 @@ def export_tiff_projs(fn, path=None, el='all', raw=True):
                 io.imsave(f'proj_{elements[i].decode()}.tif', proj[:, i, :, :])
         else:
             io.imsave(f'proj_{elements[el_ind].decode()}.tif', proj[:, el_ind, :, :])
-    
+
     return
 
 def export_tiff_volumes(fn, path=None, el='all'):
@@ -737,7 +740,7 @@ def export_tiff_volumes(fn, path=None, el='all'):
     if (el_ind == -1):
         print(f'{el} not found.')
         return
-    
+
     with h5py.File(path+fn, 'r') as f:
         recon = f['reconstruction/recon/volume']
         elements = f['reconstruction/recon/volume_elements']
@@ -759,6 +762,6 @@ def export_tiff_volumes(fn, path=None, el='all'):
                 io.imsave(f'vol_{elements[i].decode()}.tif', recon[i, :, :, :])
         else:
             io.imsave(f'vol_{elements[el_ind].decode()}.tif', recon[el_ind, :, :, :])
-    
+
     return
 
