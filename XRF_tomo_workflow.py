@@ -11,40 +11,38 @@ import skimage.io as io
 import skimage.transform as tf
 from skimage.registration import phase_cross_correlation
 
+from tomopy.util.misc import write_tiff
 
 from pyxrf.api_dev import make_hdf, dask_client_create, fit_pixel_data_and_save
 
 
-# Get the projections from the data broker
-def grab_proj(start=None, end=None):
-    if start is None:
-        print("Please define a starting scan number.")
-        return
-
+def grab_proj(start, end=None):
+    """
+    Get the projections from the data broker
+    """
     make_hdf(start, end=end)
 
 
-# Read the log file and return pandas dataframe
-def read_logfile(fn, wd=None):
-    # Check the working directory
-    if wd is None:
-        wd = os.getcwd() + os.sep
-
-    df = pd.read_csv(wd + fn, sep=",")
-    return df
+def read_logfile(fn, *, wd="."):
+    """
+    Read the log file and return pandas dataframe
+    """
+    return pd.read_csv(os.path.join(wd, fn), sep=",")
 
 
-# Process the projections
-def process_proj(wd=None, param_file=None, ic_name="sclr_i0", save_tiff=False):
+def process_proj(*, wd=".", fn_param=None, fn_log="tomo_info.dat", ic_name="sclr_i0", save_tiff=False):
+    """
+    Process the projections
+    """
+    if fn_param is None:
+        raise ValueError("The name of the file with fitting parameters ('fn_param') is not specified")
+
     # Check the working directory and go to it
-    if wd is None:
-        wd = os.getcwd()
-    if wd[-1] != os.sep:
-        wd += os.sep
+    wd = os.path.abspath(wd)
     os.chdir(wd)
 
     # Read from logfile
-    log = read_logfile("tomo_info.dat", wd=wd)
+    log = read_logfile(fn_log, wd=wd)
 
     # Filter results
     log = log[log["Use"] == "x"]
@@ -53,12 +51,9 @@ def process_proj(wd=None, param_file=None, ic_name="sclr_i0", save_tiff=False):
     ls = list(log["Filename"])
     N = len(ls)
 
-    # Add a check for the number of projections and if it matches theta
+    # TODO: Add a check for the number of projections and if it matches theta
 
-    # Do spectrum fitting
-    if param_file is None:
-        print("Automatically finding elements is not implemented yet.")
-        return
+    # SPECTRUM FITTING
 
     # Create dask client
     client = dask_client_create()
@@ -66,28 +61,39 @@ def process_proj(wd=None, param_file=None, ic_name="sclr_i0", save_tiff=False):
     i = 0
     for f in ls:
         i = i + 1
-        print("Fitting spectra...%04d/%04d" % (i, N), end="\r")
+        print("Fitting spectra: %04d/%04d" % (i, N), end="\r")
         fit_pixel_data_and_save(
-            wd, f, param_file_name=param_file, scaler_name=ic_name, save_tiff=save_tiff, dask_client=client
+            wd, f, param_file_name=fn_param, scaler_name=ic_name, save_tiff=save_tiff, dask_client=client
         )
 
     # Close the dask client
     client.close()
 
-    print("Fitting spectra...done")
+    print("Fitting spectra is completed")
 
 
-def make_single_hdf(wd, fn, convert_theta=False):
-    # Change to the working directory
+def make_single_hdf(fn, *, fn_log="tomo_info.dat", wd=".", convert_theta=False, include_raw_data=False):
+    """
+    Change to the working directory
+
+    Parameters
+    ----------
+    fn: str
+        Name of the HDF5 file to create
+    fn_log: str
+        Name of the log file
+    wd: str
+        Working directory (for both source and destination files)
+    convert_theta: bool
+        True - convert Theta from mdeg to deg by dividing by 1000, False - Theta is already deg
+    include_raw_data: bool
+        True - copy raw ('sum') data to the single HDF5 file, False - copy only fitted data (saves disk space)
+    """
+    wd = os.path.abspath(wd)
     os.chdir(wd)
-    if wd[-1] != os.sep:
-        wd += os.sep
-
-    # Define scan log file
-    # fn_log = "tomo_info.dat"
 
     # Read from logfile
-    log = read_logfile("tomo_info.dat", wd=wd)
+    log = read_logfile(fn_log, wd=wd)
 
     # Filter and sort results
     log = log[log["Use"] == "x"]
@@ -111,12 +117,13 @@ def make_single_hdf(wd, fn, convert_theta=False):
         # Load the data
         flag_first = True
         for i in range(num):
-            fn = log.loc[log["Theta"] == th[i], "Filename"].values[0]
+            fn_src = log.loc[log["Theta"] == th[i], "Filename"].values[0]
             print("Collecting data...%04d/%04d (file '%s')" % (i + 1, num, fn), end="\n")
-            with h5py.File(fn, "r") as tmp_f:
+            with h5py.File(fn_src, "r") as tmp_f:
                 if flag_first:
-                    raw = tmp_f["xrfmap"]["detsum"]["counts"]
-                    raw = np.expand_dims(raw, axis=0)
+                    if include_raw_data:
+                        raw = tmp_f["xrfmap"]["detsum"]["counts"]
+                        raw = np.expand_dims(raw, axis=0)
                     xrf_fit = tmp_f["xrfmap"]["detsum"]["xrf_fit"]
                     xrf_fit = np.expand_dims(xrf_fit, axis=0)
                     xrf_fit_names = np.array(tmp_f["xrfmap"]["detsum"]["xrf_fit_name"])
@@ -127,10 +134,11 @@ def make_single_hdf(wd, fn, convert_theta=False):
                     i0 = tmp_f["xrfmap"]["scalers"]["val"][:, :, 0]
                     i0 = np.expand_dims(i0, axis=0)
 
-                    f_raw = f.create_dataset(
-                        "/exchange/raw", data=raw, maxshape=(num, *raw.shape[1:]), compression="gzip"
-                    )
-                    f_raw.resize(num, axis=0)
+                    if include_raw_data:
+                        f_raw = f.create_dataset(
+                            "/exchange/raw", data=raw, maxshape=(num, *raw.shape[1:]), compression="gzip"
+                        )
+                        f_raw.resize(num, axis=0)
                     if convert_theta:
                         f.create_dataset("/exchange/theta", data=th / 1000)
                     else:
@@ -154,15 +162,18 @@ def make_single_hdf(wd, fn, convert_theta=False):
 
                     flag_first = False
                 else:
-                    f_raw[i, :, :, :] = tmp_f["xrfmap"]["detsum"]["counts"]
+                    if include_raw_data:
+                        f_raw[i, :, :, :] = tmp_f["xrfmap"]["detsum"]["counts"]
                     f_fit[i, :, :, :] = tmp_f["xrfmap"]["detsum"]["xrf_fit"]
                     f_x[i, :, :] = tmp_f["xrfmap"]["positions"]["pos"][1, :]
                     f_y[i, :, :] = tmp_f["xrfmap"]["positions"]["pos"][0, :]
                     f_i0[i, :, :] = tmp_f["xrfmap"]["scalers"]["val"][:, :, 0]
-        del flag_first
 
 
 def align_proj_com(fn, element="all"):
+    """
+    Compute centers of mass of images and alignment ('delx' and 'dely') based on center of mass.
+    """
     # Load the file
     with h5py.File(fn, "r+") as f:
         com = list([])
@@ -226,129 +237,145 @@ def align_proj_com(fn, element="all"):
             dset[...] = dely
 
 
-# Don't use this one. Use one below in testing
-def find_rotation_center(fn, element="all"):
-    # Load the file
-    with h5py.File(fn, "r+") as f:
-        # com = list([])
+# # Don't use this one. Use one below in testing
+# def find_rotation_center(fn, element="all"):
+#     # Load the file
+#     with h5py.File(fn, "r+") as f:
+#         # com = list([])
 
-        N_th = f["reconstruction"]["fitting"]["data"].shape[0]
-        N_el = f["reconstruction"]["fitting"]["data"].shape[1]
-        for i in range(N_th):
-            # Load an image
-            I_tmp = np.squeeze(f["reconstruction"]["fitting"]["data"][i, :, :, :])
+#         N_th = f["reconstruction"]["fitting"]["data"].shape[0]
+#         N_el = f["reconstruction"]["fitting"]["data"].shape[1]
+#         for i in range(N_th):
+#             # Load an image
+#             I_tmp = np.squeeze(f["reconstruction"]["fitting"]["data"][i, :, :, :])
 
-            # Choose the element to look at
-            II = np.zeros(I_tmp.shape[1:])
-            if element == "all":
-                # then sum all
-                II = np.sum(I_tmp, axis=0)
-            # for ii in range(N_el):
-            #     if ('compton' in f['reconstruction']['fitting']['elements'][ii]):
-            #         continue
-            #     if ('bkg' in f['reconstruction']['fitting']['elements'][ii]):
-            #         continue
-            #     if ('adjust' in f['reconstruction']['fitting']['elements'][ii]):
-            #         continue
-            #     if ('elastic' in f['reconstruction']['fitting']['elements'][ii]):
-            #         continue
-            #     else:
-            #         II = II + f['reconstruction']['fitting']['data'][i, ii, :, :]
-            else:
-                # look at only that element
-                for ii in range(N_el):
-                    if element in f["reconstruction"]["fitting"]["elements"][ii]:
-                        II = II + f["reconstruction"]["fitting"]["data"][i, ii, :, :]
+#             # Choose the element to look at
+#             II = np.zeros(I_tmp.shape[1:])
+#             if element == "all":
+#                 # then sum all
+#                 II = np.sum(I_tmp, axis=0)
+#             # for ii in range(N_el):
+#             #     if ('compton' in f['reconstruction']['fitting']['elements'][ii]):
+#             #         continue
+#             #     if ('bkg' in f['reconstruction']['fitting']['elements'][ii]):
+#             #         continue
+#             #     if ('adjust' in f['reconstruction']['fitting']['elements'][ii]):
+#             #         continue
+#             #     if ('elastic' in f['reconstruction']['fitting']['elements'][ii]):
+#             #         continue
+#             #     else:
+#             #         II = II + f['reconstruction']['fitting']['data'][i, ii, :, :]
+#             else:
+#                 # look at only that element
+#                 for ii in range(N_el):
+#                     if element in f["reconstruction"]["fitting"]["elements"][ii]:
+#                         II = II + f["reconstruction"]["fitting"]["data"][i, ii, :, :]
 
-            # Normalize by i0
-            I0 = f["exchange"]["i0"][i]
-            If = II / I0
+#             # Normalize by i0
+#             I0 = f["exchange"]["i0"][i]
+#             If = II / I0
 
-            # need to remove any possible divide by zero, nan, inf conditions
-            If = tomopy.misc.corr.remove_nan(If, val=0)
+#             # need to remove any possible divide by zero, nan, inf conditions
+#             If = tomopy.misc.corr.remove_nan(If, val=0)
 
-            # Shift values
-            # try:
-            #     delx = f["reconstruction"]["recon"]["del_x"]
-            # except Exception:
-            #     delx = 0
+#             # Shift values
+#             # try:
+#             #     delx = f["reconstruction"]["recon"]["del_x"]
+#             # except Exception:
+#             #     delx = 0
 
-            # for i in range(num):
-            #     sino[i, :] = np.roll(sino[i, :], np.int(delx[i]))
-
-
-def load_images():
-    # Load the file
-    with h5py.File(fn, "r+") as f:
-        # com = list([])
-
-        N_th = f["reconstruction"]["fitting"]["data"].shape[0]
-        N_el = f["reconstruction"]["fitting"]["data"].shape[1]
-        for i in range(N_th):
-            # Load an image
-            I_tmp = np.squeeze(f["reconstruction"]["fitting"]["data"][i, :, :, :])
-
-            # Choose the element to look at
-            II = np.zeros(I_tmp.shape[1:])
-            if element == "all":
-                # then sum all
-                II = np.sum(I_tmp, axis=0)
-            # for ii in range(N_el):
-            #     if ('compton' in f['reconstruction']['fitting']['elements'][ii]):
-            #         continue
-            #     if ('bkg' in f['reconstruction']['fitting']['elements'][ii]):
-            #         continue
-            #     if ('adjust' in f['reconstruction']['fitting']['elements'][ii]):
-            #         continue
-            #     if ('elastic' in f['reconstruction']['fitting']['elements'][ii]):
-            #         continue
-            #     else:
-            #         II = II + f['reconstruction']['fitting']['data'][i, ii, :, :]
-            else:
-                # look at only that element
-                for ii in range(N_el):
-                    if element in f["reconstruction"]["fitting"]["elements"][ii]:
-                        II = II + f["reconstruction"]["fitting"]["data"][i, ii, :, :]
-
-            # Normalize by i0
-            I0 = f["exchange"]["i0"][i]
-            If = II / I0
-
-            # need to remove any possible divide by zero, nan, inf conditions
-            If = tomopy.misc.corr.remove_nan(If, val=0)
+#             # for i in range(num):
+#             #     sino[i, :] = np.roll(sino[i, :], np.int(delx[i]))
 
 
-####################
-# testing
-def moving_translate_alignment():
-    proj = f["/reconstruction/fitting/data"][:, 4, :, :]
-    for i in np.arange(45, 132 - 1):
-        shift, _, _ = register_translation(proj[i, :, :], proj[i + 1, :, :])
-        dy, dx = shift
-        print(shift)
-        II = proj[i + 1, :, :]
-        II = fourier_shift(np.fft.fftn(II), shift)
-        II = np.fft.ifftn(II)
-        proj[i + 1, :, :] = II
-    io.imsave("Ni.tif", proj)
+# def load_images():
+#     # Load the file
+#     with h5py.File(fn, "r+") as f:
+#         # com = list([])
+
+#         N_th = f["reconstruction"]["fitting"]["data"].shape[0]
+#         N_el = f["reconstruction"]["fitting"]["data"].shape[1]
+#         for i in range(N_th):
+#             # Load an image
+#             I_tmp = np.squeeze(f["reconstruction"]["fitting"]["data"][i, :, :, :])
+
+#             # Choose the element to look at
+#             II = np.zeros(I_tmp.shape[1:])
+#             if element == "all":
+#                 # then sum all
+#                 II = np.sum(I_tmp, axis=0)
+#             # for ii in range(N_el):
+#             #     if ('compton' in f['reconstruction']['fitting']['elements'][ii]):
+#             #         continue
+#             #     if ('bkg' in f['reconstruction']['fitting']['elements'][ii]):
+#             #         continue
+#             #     if ('adjust' in f['reconstruction']['fitting']['elements'][ii]):
+#             #         continue
+#             #     if ('elastic' in f['reconstruction']['fitting']['elements'][ii]):
+#             #         continue
+#             #     else:
+#             #         II = II + f['reconstruction']['fitting']['data'][i, ii, :, :]
+#             else:
+#                 # look at only that element
+#                 for ii in range(N_el):
+#                     if element in f["reconstruction"]["fitting"]["elements"][ii]:
+#                         II = II + f["reconstruction"]["fitting"]["data"][i, ii, :, :]
+
+#             # Normalize by i0
+#             I0 = f["exchange"]["i0"][i]
+#             If = II / I0
+
+#             # need to remove any possible divide by zero, nan, inf conditions
+#             If = tomopy.misc.corr.remove_nan(If, val=0)
 
 
-def get_elements(fn, ret=False, path=None):
-    if path is None:
-        path = os.getcwd() + os.sep
+# ####################
+# # testing
+# def moving_translate_alignment():
+#     proj = f["/reconstruction/fitting/data"][:, 4, :, :]
+#     for i in np.arange(45, 132 - 1):
+#         shift, _, _ = register_translation(proj[i, :, :], proj[i + 1, :, :])
+#         dy, dx = shift
+#         print(shift)
+#         II = proj[i + 1, :, :]
+#         II = fourier_shift(np.fft.fftn(II), shift)
+#         II = np.fft.ifftn(II)
+#         proj[i + 1, :, :] = II
+#     io.imsave("Ni.tif", proj)
 
-    with h5py.File(path + fn, "r") as f:
-        elements = list(f["/reconstruction/fitting/elements"])
 
-    N = len(elements)
-    if ret is False:
-        for i in range(N):
-            print(elements[i].decode())
+def get_elements(fn, *, path=".", ret=False):
+    """
+    Returns the list of elements loaded from the single HDF5 file.
+    """
 
-    if ret is True:
-        return (elements, N)
+    path = os.path.abspath(path)
+
+    with h5py.File(os.path.join(path, fn), "r") as f:
+        elements = f["/reconstruction/fitting/elements"]
+
+    elements = [_.decode() for _ in elements]
+    if ret:
+        return elements
     else:
-        return
+        print(f"Elements: {elements}")
+
+
+def get_recon_elements(fn, *, path=".", ret=False):
+    """
+    Returns the list of elements for which reconstructed volume is available in the single HDF5 file.
+    """
+
+    path = os.path.abspath(path)
+
+    with h5py.File(os.path.join(path, fn), "r") as f:
+        elements = f["reconstruction/recon/volume_elements"]
+
+    elements = [_.decode() for _ in elements]
+    if ret:
+        return elements
+    else:
+        print(f"Reconstructed elements: {elements}")
 
 
 # Overwriting the align_seq from tomopy
@@ -488,24 +515,21 @@ def align_seq(
     return prj, sx, sy, conv
 
 
-def find_alignment(fn, el, path=None):
-    # Check path
-    if path is None:
-        path = os.getcwd() + os.sep
-    if path[-1] != os.sep:
-        path += os.sep
+def find_alignment(fn, el, *, path="."):
 
-    elements, N = get_elements(fn, ret=True, path=path)
+    path = os.path.abspath(path)
+
+    elements = get_elements(fn, ret=True, path=path)
     el_ind = -1
-    for i in range(N):
-        if el in elements[i].decode():
+    for i, elem in enumerate(elements):
+        if elem.startswith(el):
             el_ind = i
             break
     if el_ind == -1:
         print(f"{el} not found.")
         return
 
-    with h5py.File(path + fn, "a") as f:
+    with h5py.File(os.path.join(path, fn), "a") as f:
         proj = np.copy(f["/reconstruction/recon/proj"][:, el_ind, :, :])
         proj = np.swapaxes(proj, 1, 2)
         th = np.copy(f["/exchange/theta"])
@@ -526,19 +550,14 @@ def find_alignment(fn, el, path=None):
             dset = f["reconstruction"]["recon"]["del_y"]
             dset[...] = shift_y
 
-    return
 
+def normalize_projections(fn, *, path="."):
 
-def normalize_projections(fn, path=None):
-    # Check path
-    if path is None:
-        path = os.getcwd() + os.sep
-    if path[-1] != os.sep:
-        path += os.sep
+    path = os.path.abspath(path)
 
-    _, N = get_elements(fn, ret=True, path=path)
+    N = len(get_elements(fn, ret=True, path=path))
 
-    with h5py.File(path + fn, "a") as f:
+    with h5py.File(os.path.join(path, fn), "a") as f:
         proj = f["/reconstruction/fitting/data"]
         i0 = f["/exchange/i0"]
 
@@ -555,24 +574,19 @@ def normalize_projections(fn, path=None):
             Inorm = tomopy.misc.corr.remove_nan(Inorm, val=0)
             dset[:, i, :, :] = Inorm
 
-    return
 
+def shift_projections(fn, *, path=".", read_only=True):
 
-def shift_projections(fn, path=None, read_only=True):
-    # Check path
-    if path is None:
-        path = os.getcwd() + os.sep
-    if path[-1] != os.sep:
-        path += os.sep
+    path = os.path.abspath(path)
 
     if read_only:
         f_str = "r"
     else:
         f_str = "a"
 
-    _, N = get_elements(fn, ret=True, path=path)
+    N = len(get_elements(fn, ret=True, path=path))
 
-    with h5py.File(path + fn, f_str) as f:
+    with h5py.File(os.path.join(path, fn), f_str) as f:
         if read_only:
             proj = np.copy(f["/reconstruction/recon/proj"])
         else:
@@ -583,32 +597,29 @@ def shift_projections(fn, path=None, read_only=True):
         for i in range(N):
             II = proj[:, i, :, :]
             shift_proj = tomopy.prep.alignment.shift_images(II, dx, dy)
-            proj[:, i, :, :] = II
+            proj[:, i, :, :] = shift_proj
 
     if read_only:
         return proj
-    else:
-        return
 
 
-def find_center(fn, el, path=None):
-    # Check path
-    if path is None:
-        path = os.getcwd() + os.sep
-    if path[-1] != os.sep:
-        path += os.sep
+def find_center(fn, el, *, path="."):
 
-    elements, N = get_elements(fn, ret=True, path=path)
+    path = os.path.abspath(path)
+
+    elements = get_elements(fn, ret=True, path=path)
+
     el_ind = -1
-    for i in range(N):
-        if el in elements[i].decode():
+    for i, elem in enumerate(elements):
+        if elem.startswith(el):
             el_ind = i
             break
+
     if el_ind == -1:
         print(f"{el} not found.")
         return
 
-    with h5py.File(path + fn, "a") as f:
+    with h5py.File(os.path.join(path, fn), "a") as f:
         proj = np.copy(f["/reconstruction/recon/proj"])
         proj = np.squeeze(proj[:, el_ind, :, :])
         # proj = np.swapaxes(proj, 1, 2)
@@ -627,19 +638,14 @@ def find_center(fn, el, path=None):
 
     print(f"Center of rotation found at {rot_center}")
 
-    return
 
+def make_volume(fn, *, path=".", algorithm="gridrec"):
 
-def make_volume(fn, path=None, algorithm="gridrec"):
-    # Check path
-    if path is None:
-        path = os.getcwd() + os.sep
-    if path[-1] != os.sep:
-        path += os.sep
+    path = os.path.abspath(path)
 
-    elements, N = get_elements(fn, ret=True, path=path)
+    elements = get_elements(fn, ret=True, path=path)
 
-    with h5py.File(path + fn, "a") as f:
+    with h5py.File(os.path.join(path, fn), "a") as f:
         proj = f["/reconstruction/recon/proj"]
         # Convert from mdeg to radians
         th = np.deg2rad(np.copy(f["/exchange/theta"]))
@@ -648,21 +654,22 @@ def make_volume(fn, path=None, algorithm="gridrec"):
         print(f"th={th}")
         # need to set this up for each element... :-(
         recon_names = []
-        for i in range(N):
+        recon = None
+        for i, el in enumerate(elements):
             # do things
             # Need to check if scattered or garbage fitting and skip
-            if elements[i].decode() in ["compton", "elastic", "snip_bkg", "r_factor", "sel_cnt", "total_cnt"]:
+            if el in ["compton", "elastic", "snip_bkg", "r_factor", "sel_cnt"]:
                 continue
 
             el_proj = proj[:, i, :, :]
             # el_proj = np.swapaxes(np.copy(el_proj), 1, 2)
             el_recon = tomopy.recon(el_proj, th, center=rot_center, algorithm=algorithm, sinogram_order=False)
-            if "recon" in dir():
-                recon = np.append(recon, np.expand_dims(el_recon, 0), axis=0)
-            else:
+            if recon is None:
                 recon = np.copy(el_recon)
                 # need to make 4-D, add an axis
                 recon = np.expand_dims(recon, 0)
+            else:
+                recon = np.append(recon, np.expand_dims(el_recon, 0), axis=0)
             recon_names.append(elements[i])
 
         try:
@@ -676,95 +683,57 @@ def make_volume(fn, path=None, algorithm="gridrec"):
             dset = f["reconstruction"]["recon"]["volume_elements"]
             dset[...] = recon_names
 
-    return
 
+def export_tiff_projs(fn, *, path=".", el="all", raw=True):
 
-def export_tiff_projs(fn, path=None, el="all", raw=True):
-    # Check path
-    if path is None:
-        path = os.getcwd() + os.sep
-    if path[-1] != os.sep:
-        path += os.sep
+    path = os.path.abspath(path)
 
-    elements, N = get_elements(fn, ret=True, path=path)
+    elements = get_elements(fn, ret=True, path=path)
     el_ind = -1
-    for i in range(N):
-        if el in elements[i].decode():
+    for i, elem in enumerate(elements):
+        if elem.startswith(el):
             el_ind = i
             break
     if el == "all":
-        el_ind = N
+        el_ind = len(elements)
     if el_ind == -1:
         print(f"{el} not found.")
         return
 
-    with h5py.File(path + fn, "r") as f:
+    with h5py.File(os.path.join(path, fn), "r") as f:
         if raw:
             proj = f["reconstruction/fitting/data"]
         else:
             proj = f["reconstruction/recon/proj"]
-        elements = f["reconstruction/fitting/elements"]
-        N = len(list(elements))
 
-        el_ind = -1
-        for i in range(N):
-            if el in elements[i].decode():
-                el_ind = i
-                break
-        if el == "all":
-            el_ind = N
-        if el_ind == -1:
-            print(f"{el} not found.")
-            return
-
-        if el_ind == N:
-            for i in range(N):
-                io.imsave(f"proj_{elements[i].decode()}.tif", proj[:, i, :, :])
+        if el_ind == len(elements):
+            for i, elem in enumerate(elements):
+                io.imsave(f"proj_{elem}.tif", proj[:, i, :, :])
         else:
-            io.imsave(f"proj_{elements[el_ind].decode()}.tif", proj[:, el_ind, :, :])
-
-    return
+            io.imsave(f"proj_{elements[el_ind]}.tif", proj[:, el_ind, :, :])
 
 
-def export_tiff_volumes(fn, path=None, el="all"):
-    # Check path
-    if path is None:
-        path = os.getcwd() + os.sep
-    if path[-1] != os.sep:
-        path += os.sep
+def export_tiff_volumes(fn, *, path=None, el="all"):
 
-    elements, N = get_elements(fn, ret=True, path=path)
+    path = os.path.abspath(path)
+
+    elements = get_recon_elements(fn, ret=True, path=path)
     el_ind = -1
-    for i in range(N):
-        if el in elements[i].decode():
+    for i, elem in enumerate(elements):
+        if elem.startswith(el):
             el_ind = i
             break
     if el == "all":
-        el_ind = N
+        el_ind = len(elements)
     if el_ind == -1:
         print(f"{el} not found.")
         return
 
     with h5py.File(path + fn, "r") as f:
         recon = f["reconstruction/recon/volume"]
-        elements = f["reconstruction/recon/volume_elements"]
-        N = len(list(elements))
 
-        el_ind = -1
-        for i in range(N):
-            if el in elements[i].decode():
-                el_ind = i
-                break
-        if el == "all":
-            el_ind = N
-        if el_ind == -1:
-            print(f"{el} not found.")
-            return
-
-        if el_ind == N:
-            for i in range(N):
-                io.imsave(f"vol_{elements[i].decode()}.tif", recon[i, :, :, :])
+        if el_ind == len(elements):
+            for i, elem in enumerate(elements):
+                io.imsave(f"proj_{elem}.tif", recon[:, i, :, :])
         else:
-            io.imsave(f"vol_{elements[el_ind].decode()}.tif", recon[el_ind, :, :, :])
-
-    return
+            io.imsave(f"proj_{elements[el_ind]}.tif", recon[:, el_ind, :, :])
