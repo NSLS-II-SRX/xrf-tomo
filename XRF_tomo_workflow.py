@@ -111,7 +111,7 @@ def make_single_hdf(
     include_raw_data: bool
         True - copy raw ('sum') data to the single HDF5 file, False - copy only fitted data (saves disk space)
     """
-    fn = os.path.expanduser(fn_log)
+    fn = os.path.expanduser(fn)
     fn_log = os.path.expanduser(fn_log)
     wd_src = os.path.abspath(os.path.expanduser(wd_src))
     wd_dest = os.path.abspath(os.path.expanduser(wd_dest))
@@ -394,11 +394,11 @@ def get_elements(fn, *, path=".", ret=False):
     with h5py.File(fn, "r") as f:
         elements = f["/reconstruction/fitting/elements"]
 
-    elements = [_.decode() for _ in elements]
-    if ret:
-        return elements
-    else:
-        print(f"Elements: {elements}")
+        elements = [_.decode() for _ in elements]
+        if ret:
+            return elements
+        else:
+            print(f"Elements: {elements}")
 
 
 def get_recon_elements(fn, *, path=".", ret=False):
@@ -416,11 +416,11 @@ def get_recon_elements(fn, *, path=".", ret=False):
     with h5py.File(fn, "r") as f:
         elements = f["reconstruction/recon/volume_elements"]
 
-    elements = [_.decode() for _ in elements]
-    if ret:
-        return elements
-    else:
-        print(f"Reconstructed elements: {elements}")
+        elements = [_.decode() for _ in elements]
+        if ret:
+            return elements
+        else:
+            print(f"Reconstructed elements: {elements}")
 
 
 def find_element(el, *, elements, select_all_elements="all"):
@@ -757,8 +757,9 @@ def make_volume(fn, *, path=".", algorithm="gridrec", rotation_center=None):
         proj = f["/reconstruction/recon/proj"]
         # Convert from mdeg to radians
         th = np.deg2rad(np.copy(f["/exchange/theta"]))
-        rot_center = f["reconstruction/recon/rot_center"] if rotation_center is None else rotation_center
-        print(f"th = {th}  rot_center = {rot_center}")
+        rot_center = float(f["reconstruction/recon/rot_center"][0]) if rotation_center is None else rotation_center
+        print(f"th = {th}")
+        print(f"rot_center = {rot_center}")
 
         # need to set this up for each element... :-(
         recon_names = []
@@ -772,6 +773,7 @@ def make_volume(fn, *, path=".", algorithm="gridrec", rotation_center=None):
             el_proj = proj[:, i, :, :]
             # el_proj = np.swapaxes(np.copy(el_proj), 1, 2)
             el_recon = tomopy.recon(el_proj, th, center=rot_center, algorithm=algorithm, sinogram_order=False)
+            el_recon = np.clip(el_recon, a_min=0, a_max=None)
             if recon is None:
                 recon = np.copy(el_recon)
                 # need to make 4-D, add an axis
@@ -828,11 +830,12 @@ def make_volume_svmbir(
         # Convert from mdeg to radians
         th = np.deg2rad(np.copy(f["/exchange/theta"]))
         if center_offset is None:
-            rot_center = f["reconstruction/recon/rot_center"]
+            rot_center = float(f["reconstruction/recon/rot_center"][0])
             center_offset = proj.shape[3] / 2 - rot_center
         else:
             rot_center = proj.shape[3] / 2 + center_offset
-        print(f"th = {th}  rot_center = {rot_center}  center_offset = {center_offset}")
+        print(f"th = {th}")
+        print(f"rot_center = {rot_center}  center_offset = {center_offset}")
 
         # need to set this up for each element... :-(
         recon_names = []
@@ -965,6 +968,6 @@ def export_tiff_volumes(fn, *, fn_dir=".", tiff_dir=".", el="all"):
 
         if el_ind == len(elements):
             for i, elem in enumerate(elements):
-                io.imsave(os.path.join(tiff_dir, f"proj_{elem}.tif"), recon[:, i, :, :])
+                io.imsave(os.path.join(tiff_dir, f"vol_{elem}.tif"), recon[i, :, :, :])
         else:
-            io.imsave(os.path.join(tiff_dir, f"proj_{elements[el_ind]}.tif"), recon[:, el_ind, :, :])
+            io.imsave(os.path.join(tiff_dir, f"vol_{elements[el_ind]}.tif"), recon[el_ind, :, :, :])
