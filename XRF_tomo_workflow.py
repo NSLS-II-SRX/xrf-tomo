@@ -15,6 +15,8 @@ from tomopy.util.misc import write_tiff
 
 from pyxrf.api_dev import make_hdf, dask_client_create, fit_pixel_data_and_save
 
+import svmbir
+
 
 def grab_proj(start, end=None):
     """
@@ -140,7 +142,7 @@ def make_single_hdf(fn, *, fn_log="tomo_info.dat", wd=".", convert_theta=False, 
                         )
                         f_raw.resize(num, axis=0)
                     if convert_theta:
-                        f.create_dataset("/exchange/theta", data=th / 1000)
+                        f.create_dataset("/exchange/theta", data=th / 1000)  # mdeg -> deg
                     else:
                         f.create_dataset("/exchange/theta", data=th)
                     f_x = f.create_dataset("/exchange/x", data=x, maxshape=(num, *x.shape[1:]), compression="gzip")
@@ -378,6 +380,43 @@ def get_recon_elements(fn, *, path=".", ret=False):
         print(f"Reconstructed elements: {elements}")
 
 
+def find_element(el, *, elements, select_all_elements="all"):
+    """
+    Find element (e.g. ``'Ca'``) or an emission line (e.g. ``'Ca_K'``) in the list of emission lines
+    (e.g. ``['Ca_K', 'Si_K]``).  The function returns the index of the first element
+    of the list ``elements`` that starts from ``el``.
+
+    Parameters
+    ----------
+    el: str
+        Element
+    elements: list(str)
+        The list of elements
+    select_all_elements: str
+        If ``el`` is equal to ``select_all_elements``, then return the total number of elements in the list
+
+    Returns
+    -------
+    int or None
+        Returns integer index of the element if an element is found, the number of elements in the list if
+        ``el == select_all_elements`` or ``None`` if the element is not found.
+    """
+
+    if el == select_all_elements:
+        return len(elements)
+
+    el_ind = None
+    for i, elem in enumerate(elements):
+        if elem.startswith(el):
+            el_ind = i
+            break
+
+    if el_ind is None:
+        raise IndexError(f"Element '{el}' is not found in the list {elements}")
+
+    return el_ind
+
+
 # Overwriting the align_seq from tomopy
 def align_seq(
     prj,
@@ -515,43 +554,6 @@ def align_seq(
     return prj, sx, sy, conv
 
 
-def find_element(el, *, elements, select_all_elements="all"):
-    """
-    Find element (e.g. ``'Ca'``) or an emission line (e.g. ``'Ca_K'``) in the list of emission lines
-    (e.g. ``['Ca_K', 'Si_K]``).  The function returns the index of the first element
-    of the list ``elements`` that starts from ``el``.
-
-    Parameters
-    ----------
-    el: str
-        Element
-    elements: list(str)
-        The list of elements
-    select_all_elements: str
-        If ``el`` is equal to ``select_all_elements``, then return the total number of elements in the list
-
-    Returns
-    -------
-    int or None
-        Returns integer index of the element if an element is found, the number of elements in the list if
-        ``el == select_all_elements`` or ``None`` if the element is not found.
-    """
-
-    if el == select_all_elements:
-        return len(elements)
-
-    el_ind = None
-    for i, elem in enumerate(elements):
-        if elem.startswith(el):
-            el_ind = i
-            break
-
-    if el_ind is None:
-        raise IndexError(f"Element '{el}' is not found in the list {elements}")
-
-    return el_ind
-
-
 def find_alignment(fn, el, *, path="."):
 
     path = os.path.abspath(path)
@@ -668,8 +670,22 @@ def find_center(fn, el, *, path="."):
     print(f"Center of rotation found at {rot_center}")
 
 
-def make_volume(fn, *, path=".", algorithm="gridrec"):
+def make_volume(fn, *, path=".", algorithm="gridrec", rotation_center=None):
+    """
+    Performs reconstruction using specified algorithm from ``tomopy``. The data is loaded from a single
+    HDF5 file. The results are saved to the same file.
 
+    Parameters
+    ----------
+        fn: str
+            Name of the single HDF5 file
+        path: str
+            Absolute or relative path to the HDF5 file
+        algorithm: str
+            Name of ``tomopy`` reconstruction algorithm
+        rotation_center: float or None
+            Overrides `rot_center` from HDF5 file. May be useful if the rotation center can not be estimated.
+    """
     path = os.path.abspath(path)
 
     elements = get_elements(fn, ret=True, path=path)
@@ -678,9 +694,9 @@ def make_volume(fn, *, path=".", algorithm="gridrec"):
         proj = f["/reconstruction/recon/proj"]
         # Convert from mdeg to radians
         th = np.deg2rad(np.copy(f["/exchange/theta"]))
-        rot_center = f["reconstruction/recon/rot_center"]
+        rot_center = f["reconstruction/recon/rot_center"] if rotation_center is None else rotation_center
+        print(f"th = {th}  rot_center = {rot_center}")
 
-        print(f"th={th}")
         # need to set this up for each element... :-(
         recon_names = []
         recon = None
@@ -693,6 +709,86 @@ def make_volume(fn, *, path=".", algorithm="gridrec"):
             el_proj = proj[:, i, :, :]
             # el_proj = np.swapaxes(np.copy(el_proj), 1, 2)
             el_recon = tomopy.recon(el_proj, th, center=rot_center, algorithm=algorithm, sinogram_order=False)
+            if recon is None:
+                recon = np.copy(el_recon)
+                # need to make 4-D, add an axis
+                recon = np.expand_dims(recon, 0)
+            else:
+                recon = np.append(recon, np.expand_dims(el_recon, 0), axis=0)
+            recon_names.append(elements[i])
+
+        if recon is None:
+            print("No reconstructed data is available")
+        else:
+            try:
+                f.create_dataset("reconstruction/recon/volume", data=recon)
+            except Exception:
+                dset = f["reconstruction"]["recon"]["volume"]
+                dset[...] = recon
+            try:
+                f.create_dataset("reconstruction/recon/volume_elements", data=recon_names)
+            except Exception:
+                dset = f["reconstruction"]["recon"]["volume_elements"]
+                dset[...] = recon_names
+
+
+def make_volume_svmbir(
+    fn, *, path=".", center_offset=None, T=0.1, p=1.1, sharpness=4.0, snr_db=20.0, max_iterations=500
+):
+    """
+    Performs reconstruction using ``svmbir`` algorithm. The data is loaded from a single
+    HDF5 file. The results are saved to the same file.
+
+    Parameters
+    ----------
+        fn: str
+            Name of the single HDF5 file
+        path: str
+            Absolute or relative path to the HDF5 file
+        center_offset: float or None
+            Displacement of the rotation center from the center of the image. If ``None``, then it is
+            computed based on ``rot_center`` from HDF5 file. Specifying the offset may be useful if
+            the rotation center can not be estimated automatically. This is the parameter of ``svmbir``.
+        T, p, sharpness, snr_db: float
+            Parameters of ``svmbir`` algorithm.
+    """
+    path = os.path.abspath(path)
+
+    elements = get_elements(fn, ret=True, path=path)
+
+    with h5py.File(os.path.join(path, fn), "a") as f:
+        proj = f["/reconstruction/recon/proj"]
+        # Convert from mdeg to radians
+        th = np.deg2rad(np.copy(f["/exchange/theta"]))
+        if center_offset is None:
+            rot_center = f["reconstruction/recon/rot_center"]
+            center_offset = proj.shape[3] / 2 - rot_center
+        else:
+            rot_center = proj.shape[3] / 2 + center_offset
+        print(f"th = {th}  rot_center = {rot_center}  center_offset = {center_offset}")
+
+        # need to set this up for each element... :-(
+        recon_names = []
+        recon = None
+        for i, el in enumerate(elements):
+            # do things
+            # Need to check if scattered or garbage fitting and skip
+            if el in ["compton", "elastic", "snip_bkg", "r_factor", "sel_cnt"]:
+                continue
+
+            el_proj = proj[:, i, :, :]
+            # el_proj = np.swapaxes(np.copy(el_proj), 1, 2)
+            el_recon = svmbir.recon(
+                el_proj,
+                th,
+                center_offset=center_offset,
+                T=T,
+                p=p,
+                sharpness=sharpness,
+                snr_db=snr_db,
+                max_iterations=max_iterations,
+            )
+            el_recon = np.swapaxes(np.copy(el_recon), 1, 2)
             if recon is None:
                 recon = np.copy(el_recon)
                 # need to make 4-D, add an axis
