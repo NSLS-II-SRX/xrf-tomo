@@ -515,18 +515,52 @@ def align_seq(
     return prj, sx, sy, conv
 
 
+def find_element(el, *, elements, select_all_elements="all"):
+    """
+    Find element (e.g. ``'Ca'``) or an emission line (e.g. ``'Ca_K'``) in the list of emission lines
+    (e.g. ``['Ca_K', 'Si_K]``).  The function returns the index of the first element
+    of the list ``elements`` that starts from ``el``.
+
+    Parameters
+    ----------
+    el: str
+        Element
+    elements: list(str)
+        The list of elements
+    select_all_elements: str
+        If ``el`` is equal to ``select_all_elements``, then return the total number of elements in the list
+
+    Returns
+    -------
+    int or None
+        Returns integer index of the element if an element is found, the number of elements in the list if
+        ``el == select_all_elements`` or ``None`` if the element is not found.
+    """
+
+    if el == select_all_elements:
+        return len(elements)
+
+    el_ind = None
+    for i, elem in enumerate(elements):
+        if elem.startswith(el):
+            el_ind = i
+            break
+
+    if el_ind is None:
+        raise IndexError(f"Element '{el}' is not found in the list {elements}")
+
+    return el_ind
+
+
 def find_alignment(fn, el, *, path="."):
 
     path = os.path.abspath(path)
 
     elements = get_elements(fn, ret=True, path=path)
-    el_ind = -1
-    for i, elem in enumerate(elements):
-        if elem.startswith(el):
-            el_ind = i
-            break
-    if el_ind == -1:
-        print(f"{el} not found.")
+    try:
+        el_ind = find_element(el, elements=elements)
+    except IndexError as ex:
+        print(f"Exception: {ex}.")
         return
 
     with h5py.File(os.path.join(path, fn), "a") as f:
@@ -608,15 +642,10 @@ def find_center(fn, el, *, path="."):
     path = os.path.abspath(path)
 
     elements = get_elements(fn, ret=True, path=path)
-
-    el_ind = -1
-    for i, elem in enumerate(elements):
-        if elem.startswith(el):
-            el_ind = i
-            break
-
-    if el_ind == -1:
-        print(f"{el} not found.")
+    try:
+        el_ind = find_element(el, elements=elements)
+    except IndexError as ex:
+        print(f"Exception: {ex}.")
         return
 
     with h5py.File(os.path.join(path, fn), "a") as f:
@@ -672,16 +701,19 @@ def make_volume(fn, *, path=".", algorithm="gridrec"):
                 recon = np.append(recon, np.expand_dims(el_recon, 0), axis=0)
             recon_names.append(elements[i])
 
-        try:
-            f.create_dataset("reconstruction/recon/volume", data=recon)
-        except Exception:
-            dset = f["reconstruction"]["recon"]["volume"]
-            dset[...] = recon
-        try:
-            f.create_dataset("reconstruction/recon/volume_elements", data=recon_names)
-        except Exception:
-            dset = f["reconstruction"]["recon"]["volume_elements"]
-            dset[...] = recon_names
+        if recon is None:
+            print("No reconstructed data is available")
+        else:
+            try:
+                f.create_dataset("reconstruction/recon/volume", data=recon)
+            except Exception:
+                dset = f["reconstruction"]["recon"]["volume"]
+                dset[...] = recon
+            try:
+                f.create_dataset("reconstruction/recon/volume_elements", data=recon_names)
+            except Exception:
+                dset = f["reconstruction"]["recon"]["volume_elements"]
+                dset[...] = recon_names
 
 
 def export_tiff_projs(fn, *, path=".", el="all", raw=True):
@@ -689,15 +721,10 @@ def export_tiff_projs(fn, *, path=".", el="all", raw=True):
     path = os.path.abspath(path)
 
     elements = get_elements(fn, ret=True, path=path)
-    el_ind = -1
-    for i, elem in enumerate(elements):
-        if elem.startswith(el):
-            el_ind = i
-            break
-    if el == "all":
-        el_ind = len(elements)
-    if el_ind == -1:
-        print(f"{el} not found.")
+    try:
+        el_ind = find_element(el, elements=elements)
+    except IndexError as ex:
+        print(f"Exception: {ex}.")
         return
 
     with h5py.File(os.path.join(path, fn), "r") as f:
@@ -718,15 +745,10 @@ def export_tiff_volumes(fn, *, path=None, el="all"):
     path = os.path.abspath(path)
 
     elements = get_recon_elements(fn, ret=True, path=path)
-    el_ind = -1
-    for i, elem in enumerate(elements):
-        if elem.startswith(el):
-            el_ind = i
-            break
-    if el == "all":
-        el_ind = len(elements)
-    if el_ind == -1:
-        print(f"{el} not found.")
+    try:
+        el_ind = find_element(el, elements=elements)
+    except IndexError as ex:
+        print(f"Exception: {ex}.")
         return
 
     with h5py.File(path + fn, "r") as f:
