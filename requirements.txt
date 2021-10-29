@@ -5,5 +5,3 @@ pandas
 pyxrf
 scipy
 scikit-image
-svmbir
-tomopy

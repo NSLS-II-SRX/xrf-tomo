@@ -15,8 +15,6 @@ from tomopy.util.misc import write_tiff
 
 from pyxrf.api_dev import make_hdf, dask_client_create, fit_pixel_data_and_save
 
-import svmbir
-
 
 def grab_proj(start, end=None, *, wd="."):
     """
@@ -817,6 +815,12 @@ def make_volume_svmbir(
         T, p, sharpness, snr_db: float
             Parameters of ``svmbir`` algorithm.
     """
+
+    try:
+        import svmbir
+    except ImportError as ex:
+        raise ImportError("'svmbir' package is not installed: {ex}") from ex
+
     fn = os.path.expanduser(fn)
     path = os.path.abspath(os.path.expanduser(path))
 

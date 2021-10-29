@@ -1,4 +1,4 @@
-name: Unit Tests
+name: Documentation
 
 on: [push, pull_request]
 
@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: [3.7, 3.8, 3.9]
+        python-version: [3.8]
       fail-fast: false
 
     steps:
@@ -30,7 +30,6 @@ jobs:
         pip install .
         pip install -r requirements-dev.txt
         pip list
-    - name: Test with pytest
+    - name: Build Docs
       run: |
-        coverage run -m pytest -vv
-        coverage report -m
+        make -C docs/ html
