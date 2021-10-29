@@ -27,7 +27,7 @@ jobs:
         # installation problems if out of date.
         python -m pip install --upgrade pip setuptools numpy
 
-        conda install tomopy -c conda-forge
+        conda install tomopy pyxrf -c conda-forge
         pip install svmbir  # Optional package
 
         pip install .

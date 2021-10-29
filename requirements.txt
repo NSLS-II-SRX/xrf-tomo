@@ -2,6 +2,4 @@
 h5py
 numpy
 pandas
-pyxrf
 scipy
-scikit-image
