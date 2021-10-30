@@ -89,7 +89,7 @@ def create_log_file(*, fn_log="tomo_info.dat", wd=".", hdf5_ext="h5"):
             mdata_missing_keys = set(mdata_keys) - mdata_available_keys
             if mdata_missing_keys:
                 raise IndexError(
-                    "The following metadata keys are missing in file '{hdf5_fn}': {mdata_missing_keys}. "
+                    f"The following metadata keys are missing in file '{hdf5_fn}': {mdata_missing_keys}. "
                     "Log file can not be created. Make sure that the files are created using recent "
                     "version of PyXRF"
                 )
@@ -98,7 +98,7 @@ def create_log_file(*, fn_log="tomo_info.dat", wd=".", hdf5_ext="h5"):
             hdf5_mdata[os.path.basename(hdf5_fn)] = mdata_selected
 
         except Exception as ex:
-            raise IOError("Failed to load metadata from '{hdf5_fn}': {ex}") from ex
+            raise IOError(f"Failed to load metadata from '{hdf5_fn}': {ex}") from ex
 
     # List of file names sorted by the angle 'theta'
     hdf5_names_sorted = sorted(hdf5_mdata, key=lambda _: hdf5_mdata[_]["param_theta"])
@@ -157,7 +157,7 @@ def read_log_file(fn, *, wd="."):
 
 
 def process_proj(
-    *, wd=".", fn_param=None, fn_log="tomo_info.dat", ic_name="sclr_i0", save_tiff=False, skip_processed=False
+    *, wd=".", fn_param=None, fn_log="tomo_info.dat", ic_name="i0", save_tiff=False, skip_processed=False
 ):
     """
     Process the projections. ``wd`` is the directory that contains raw .h5 files,
@@ -224,7 +224,7 @@ def process_proj(
 
 
 def make_single_hdf(
-    fn, *, fn_log="tomo_info.dat", wd_src=".", wd_dest=".", convert_theta=False, include_raw_data=False
+    fn, *, fn_log="tomo_info.dat", wd_src=".", wd_dest=".", ic_name="i0", convert_theta=False, include_raw_data=False
 ):
     """
     Change to the working directory
@@ -240,6 +240,8 @@ def make_single_hdf(
     wd_dest: str
         The directory where the single HDF5 file is created. If ``fn`` is an absolute path,
         then ``wd_dest`` is ignored.
+    ic_name: str
+        name of the scaler for normalization of fluorescence data
     convert_theta: bool
         True - convert Theta from mdeg to deg by dividing by 1000, False - Theta is already deg
     include_raw_data: bool
@@ -289,7 +291,14 @@ def make_single_hdf(
                     x = np.expand_dims(x, axis=0)
                     y = tmp_f["xrfmap"]["positions"]["pos"][0, :]
                     y = np.expand_dims(y, axis=0)
-                    i0 = tmp_f["xrfmap"]["scalers"]["val"][:, :, 0]
+
+                    scaler_names = tmp_f["xrfmap"]["scalers"]["name"]
+                    scaler_names = [_.decode() for _ in scaler_names]
+                    try:
+                        scaler_ind = scaler_names.index(ic_name)
+                    except ValueError:
+                        raise RuntimeError(f"Scaler '{ic_name}' is not found. Available scalers: {scaler_names}")
+                    i0 = tmp_f["xrfmap"]["scalers"]["val"][:, :, scaler_ind]
                     i0 = np.expand_dims(i0, axis=0)
 
                     if include_raw_data:
