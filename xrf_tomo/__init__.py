@@ -5,7 +5,8 @@ del get_versions
 
 from .xrf_tomo_workflow import (  # noqa: F401, E402
     grab_proj,
-    read_logfile,
+    create_log_file,
+    read_log_file,
     process_proj,
     make_single_hdf,
     align_proj_com,

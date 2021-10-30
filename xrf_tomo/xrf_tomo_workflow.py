@@ -5,6 +5,8 @@ import os
 import h5py
 import numpy as np
 import pandas as pd
+import glob
+import time as ttime
 
 from scipy.ndimage import center_of_mass
 import skimage.io as io
@@ -14,6 +16,7 @@ from skimage.registration import phase_cross_correlation
 from tomopy.util.misc import write_tiff
 
 from pyxrf.api_dev import make_hdf, dask_client_create, fit_pixel_data_and_save
+from pyxrf.core.utils import convert_time_from_nexus_string
 
 
 def _process_fn(fn, *, fn_dir="."):
@@ -24,7 +27,7 @@ def _process_fn(fn, *, fn_dir="."):
     fn = os.path.expanduser(fn)
     if not os.path.isabs(fn):
         fn_dir = os.path.expanduser(fn_dir)
-        fn = os.path.join(fn, fn_dir)
+        fn = os.path.join(fn_dir, fn)
     fn = os.path.abspath(fn)
     fn = os.path.normpath(fn)
     return fn
@@ -48,7 +51,97 @@ def grab_proj(start, end=None, *, wd="."):
     make_hdf(start, end=end, wd=wd)
 
 
-def read_logfile(fn, *, wd="."):
+def create_log_file(*, fn_log="tomo_info.dat", wd=".", hdf5_ext="h5"):
+    """
+    Create log file ``fn`` based on the files contained in ``wd``. If ``fn``
+    is a relative path, it is assumed that the root is in ``wd``.
+    """
+    wd = _process_dir(wd)
+    fn_log = _process_fn(fn_log, fn_dir=wd)
+
+    # Create the list of HDF5 files
+    hdf5_list = glob.glob(os.path.join(wd, f"*.{hdf5_ext}"))
+
+    mdata_keys = [
+        "scan_time_start",
+        "scan_id",
+        "param_theta",
+        "param_theta",
+        "param_input",
+        "scan_uid",
+        "scan_exit_status",
+    ]
+    hdf5_mdata = {}
+
+    for hdf5_fn in hdf5_list:
+        try:
+            mdata, mdata_selected = {}, {}
+            with h5py.File(hdf5_fn, "r") as f:
+                # Retrieve metadata if it exists
+                if "xrfmap/scan_metadata" in f:  # Metadata is always loaded
+                    metadata = f["xrfmap/scan_metadata"]
+                    for key, value in metadata.attrs.items():
+                        # Convert ndarrays to lists (they were lists before they were saved)
+                        if isinstance(value, np.ndarray):
+                            value = list(value)
+                        mdata[key] = value
+            mdata_available_keys = set(mdata.keys())
+            mdata_missing_keys = set(mdata_keys) - mdata_available_keys
+            if mdata_missing_keys:
+                raise IndexError(
+                    "The following metadata keys are missing in file '{hdf5_fn}': {mdata_missing_keys}. "
+                    "Log file can not be created. Make sure that the files are created using recent "
+                    "version of PyXRF"
+                )
+
+            mdata_selected = {_: mdata[_] for _ in mdata_keys}
+            hdf5_mdata[os.path.basename(hdf5_fn)] = mdata_selected
+
+        except Exception as ex:
+            raise IOError("Failed to load metadata from '{hdf5_fn}': {ex}") from ex
+
+    # List of file names sorted by the angle 'theta'
+    hdf5_names_sorted = sorted(hdf5_mdata, key=lambda _: hdf5_mdata[_]["param_theta"])
+
+    column_labels = [
+        "Start Time",
+        "Scan ID",
+        "Theta",
+        "Use",
+        "Filename",
+        "X Start",
+        "X Stop",
+        "Num X",
+        "Y Start",
+        "Y Stop",
+        "Num Y",
+        "Dwell",
+        "UID",
+        "Status",
+    ]
+    hdf5_mdata_sorted = []
+    for hdf5_fn in hdf5_names_sorted:
+        md = hdf5_mdata[hdf5_fn]
+        hdf5_mdata_sorted.append(
+            [
+                ttime.strftime("%a %b %d %H:%M:%S %Y", convert_time_from_nexus_string(md["scan_time_start"])),
+                md["scan_id"],
+                np.round(md["param_theta"], 3),
+                "x",
+                hdf5_fn,
+                *[np.round(_, 3) for _ in md["param_input"][0:7]],
+                md["scan_uid"],
+                md["scan_exit_status"],
+            ]
+        )
+    df = pd.DataFrame(data=hdf5_mdata_sorted, columns=column_labels)
+
+    os.makedirs(os.path.dirname(fn_log), exist_ok=True)
+    df.to_csv(fn_log, sep=",", index=False)
+    print(f"Log file '{fn_log}' was successfully created.")
+
+
+def read_log_file(fn, *, wd="."):
     """
     Read the log file and return pandas dataframe.
 
@@ -78,7 +171,7 @@ def process_proj(*, wd=".", fn_param=None, fn_log="tomo_info.dat", ic_name="sclr
     fn_log = _process_fn(fn_log, fn_dir=wd)
 
     # Read from logfile
-    log = read_logfile(fn_log, wd=wd)
+    log = read_log_file(fn_log, wd=wd)
 
     # Filter results
     log = log[log["Use"] == "x"]
@@ -136,7 +229,7 @@ def make_single_hdf(
     fn = _process_fn(fn, fn_dir=wd_dest)
 
     # Read from logfile
-    log = read_logfile(fn_log, wd=wd_src)
+    log = read_log_file(fn_log, wd=wd_src)
 
     # Filter and sort results
     log = log[log["Use"] == "x"]

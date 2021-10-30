@@ -2,9 +2,14 @@
 
 import numpy as np
 import time as ttime
+from pyxrf.api_dev import db
 
 
 def get_tomo_information(start, stop, fn="tomo_info.dat"):
+
+    if not db:
+        raise RuntimeError("Databroker is not available")
+
     # Make a list of scan IDs
     ids = list(np.arange(start, stop + 1))
 
