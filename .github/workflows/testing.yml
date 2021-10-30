@@ -75,7 +75,6 @@ jobs:
         ln -sf /usr/local/bin/gcc-10 /usr/local/bin/gcc
         gcc --version
         CC=gcc pip install --no-binary svmbir svmbir
-        # pip install svmbir
 
     - name: Install 'svmbir' - Windows
       if: matrix.host-os == 'windows-latest'

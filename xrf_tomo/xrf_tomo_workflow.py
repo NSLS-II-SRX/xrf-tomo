@@ -29,6 +29,7 @@ def _process_fn(fn, *, fn_dir="."):
     fn = os.path.normpath(fn)
     return fn
 
+
 def _process_dir(fn_dir="."):
     """
     Returns normalized absolute path to directory.
