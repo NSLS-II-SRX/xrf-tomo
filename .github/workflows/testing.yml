@@ -67,13 +67,15 @@ jobs:
 
         pip install svmbir
 
-    # - name: Install 'svmbir' - Mac OS
-    #   if: matrix.host-os == 'macos-latest'
-    #   run: |
-    #     set -vxeuo pipefail
+    - name: Install 'svmbir' - Mac OS
+      if: matrix.host-os == 'macos-latest'
+      run: |
+        set -vxeuo pipefail
 
-    #     # pip install --no-binary svmbir svmbir
-    #     pip install svmbir
+        ln -sf /usr/local/bin/gcc-10 /usr/local/bin/gcc
+        gcc --version
+        CC=gcc pip install --no-binary svmbir svmbir
+        # pip install svmbir
 
     - name: Install 'svmbir' - Windows
       if: matrix.host-os == 'windows-latest'
