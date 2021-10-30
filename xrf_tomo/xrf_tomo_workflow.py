@@ -16,11 +16,34 @@ from tomopy.util.misc import write_tiff
 from pyxrf.api_dev import make_hdf, dask_client_create, fit_pixel_data_and_save
 
 
+def _process_fn(fn, *, fn_dir="."):
+    """
+    Returns normalized absolute path to the file. If ``fn`` is an absolute path,
+    then ``fn_dir`` is ignored.
+    """
+    fn = os.path.expanduser(fn)
+    if not os.path.isabs(fn):
+        fn_dir = os.path.expanduser(fn_dir)
+        fn = os.path.join(fn, fn_dir)
+    fn = os.path.abspath(fn)
+    fn = os.path.normpath(fn)
+    return fn
+
+def _process_dir(fn_dir="."):
+    """
+    Returns normalized absolute path to directory.
+    """
+    fn_dir = os.path.expanduser(fn_dir)
+    fn_dir = os.path.abspath(fn_dir)
+    fn_dir = os.path.normpath(fn_dir)
+    return fn_dir
+
+
 def grab_proj(start, end=None, *, wd="."):
     """
     Get the projections from the data broker
     """
-    wd = os.path.abspath(os.path.expanduser(wd))
+    wd = _process_dir(wd)
     make_hdf(start, end=end, wd=wd)
 
 
@@ -35,26 +58,23 @@ def read_logfile(fn, *, wd="."):
     wd: str
         Directory that contains the log file. If ``fn`` is absolute path, then ``wd`` is ignored.
     """
-    fn = os.path.expanduser(fn)
-    wd = os.path.abspath(os.path.expanduser(wd))
-    if not os.path.isabs(fn):
-        fn = os.path.join(wd, fn)
+    fn = _process_fn(fn, fn_dir=wd)
     return pd.read_csv(fn, sep=",")
 
 
 def process_proj(*, wd=".", fn_param=None, fn_log="tomo_info.dat", ic_name="sclr_i0", save_tiff=False):
     """
     Process the projections. ``wd`` is the directory that contains raw .h5 files,
-    the parameter file and the log file. Specify full absolute paths for ``fn_param`` and/or ``fn_log``
-    if those files are located in a directory different from ``wd``.
+    the parameter file and the log file. If ``fn_param`` and/or ``fn_log`` are relative
+    paths, then ``wd`` is considered a root directory.
     """
     if fn_param is None:
         raise ValueError("The name of the file with fitting parameters ('fn_param') is not specified")
 
     # Check the working directory and go to it
-    fn_param = os.path.expanduser(fn_param)
-    fn_log = os.path.expanduser(fn_log)
-    wd = os.path.abspath(os.path.expanduser(wd))
+    wd = _process_dir(wd)
+    fn_param = _process_fn(fn_param, fn_dir=wd)
+    fn_log = _process_fn(fn_log, fn_dir=wd)
 
     # Read from logfile
     log = read_logfile(fn_log, wd=wd)
@@ -100,7 +120,7 @@ def make_single_hdf(
     fn_log: str
         Name of the log file. Specify absolute path if the location of the file is different from ``wd_src``.
     wd_src: str
-        The directory that contains source files including ``fn_log``.
+        The directory that contains source files including ``fn_log`` and HDF5 files.
     wd_dest: str
         The directory where the single HDF5 file is created. If ``fn`` is an absolute path,
         then ``wd_dest`` is ignored.
@@ -109,10 +129,10 @@ def make_single_hdf(
     include_raw_data: bool
         True - copy raw ('sum') data to the single HDF5 file, False - copy only fitted data (saves disk space)
     """
-    fn = os.path.expanduser(fn)
-    fn_log = os.path.expanduser(fn_log)
-    wd_src = os.path.abspath(os.path.expanduser(wd_src))
-    wd_dest = os.path.abspath(os.path.expanduser(wd_dest))
+    wd_src = _process_dir(wd_src)
+    fn_log = _process_fn(fn_log, fn_dir=wd_src)
+    wd_dest = _process_dir(wd_dest)
+    fn = _process_fn(fn, fn_dir=wd_dest)
 
     # Read from logfile
     log = read_logfile(fn_log, wd=wd_src)
@@ -123,9 +143,6 @@ def make_single_hdf(
 
     th = log["Theta"].values
     num = log.shape[0]
-
-    if not os.path.isabs(fn):
-        fn = os.path.join(wd_dest, fn)
 
     # Create a blank h5 file
     with h5py.File(fn, "w") as f:
@@ -144,7 +161,7 @@ def make_single_hdf(
         for i in range(num):
             fn_src = log.loc[log["Theta"] == th[i], "Filename"].values[0]
             print("Collecting data...%04d/%04d (file '%s')" % (i + 1, num, fn), end="\n")
-            with h5py.File(fn_src, "r") as tmp_f:
+            with h5py.File(os.path.join(wd_src, fn_src), "r") as tmp_f:
                 if flag_first:
                     if include_raw_data:
                         raw = tmp_f["xrfmap"]["detsum"]["counts"]
@@ -201,12 +218,7 @@ def align_proj_com(fn, element="all", *, path="."):
     If ``fn`` is an absolute path, then ``path`` is ignored.
     """
 
-    fn = os.path.expanduser(fn)
-    path = os.path.abspath(os.path.expanduser(path))
-
-    # Load the file
-    if not os.path.isabs(fn):
-        fn = os.path.join(path, fn)
+    fn = _process_fn(fn, fn_dir=path)
 
     with h5py.File(fn, "r+") as f:
         com = list([])
@@ -383,11 +395,7 @@ def get_elements(fn, *, path=".", ret=False):
     If ``fn`` is absolute path, then ``path`` is ignored.
     """
 
-    fn = os.path.expanduser(fn)
-    path = os.path.abspath(os.path.expanduser(path))
-
-    if not os.path.isabs(fn):
-        fn = os.path.join(path, fn)
+    fn = _process_fn(fn, fn_dir=path)
 
     with h5py.File(fn, "r") as f:
         elements = f["/reconstruction/fitting/elements"]
@@ -405,11 +413,7 @@ def get_recon_elements(fn, *, path=".", ret=False):
     If ``fn`` is absolute path, then ``path`` is ignored.
     """
 
-    fn = os.path.expanduser(fn)
-    path = os.path.abspath(os.path.expanduser(path))
-
-    if not os.path.isabs(fn):
-        fn = os.path.join(path, fn)
+    fn = _process_fn(fn, fn_dir=path)
 
     with h5py.File(fn, "r") as f:
         elements = f["reconstruction/recon/volume_elements"]
@@ -597,11 +601,8 @@ def align_seq(
 
 def find_alignment(fn, el, *, path="."):
 
-    fn = os.path.expanduser(fn)
-    path = os.path.abspath(os.path.expanduser(path))
-
-    if not os.path.isabs(fn):
-        fn = os.path.join(path, fn)
+    path = _process_dir(path)
+    fn = _process_fn(fn, fn_dir=path)
 
     elements = get_elements(fn, ret=True, path=path)
     try:
@@ -634,11 +635,8 @@ def find_alignment(fn, el, *, path="."):
 
 def normalize_projections(fn, *, path="."):
 
-    fn = os.path.expanduser(fn)
-    path = os.path.abspath(os.path.expanduser(path))
-
-    if not os.path.isabs(fn):
-        fn = os.path.join(path, fn)
+    path = _process_dir(path)
+    fn = _process_fn(fn, fn_dir=path)
 
     N = len(get_elements(fn, ret=True, path=path))
 
@@ -662,16 +660,10 @@ def normalize_projections(fn, *, path="."):
 
 def shift_projections(fn, *, path=".", read_only=True):
 
-    fn = os.path.expanduser(fn)
-    path = os.path.abspath(os.path.expanduser(path))
+    path = _process_dir(path)
+    fn = _process_fn(fn, fn_dir=path)
 
-    if not os.path.isabs(fn):
-        fn = os.path.join(path, fn)
-
-    if read_only:
-        f_str = "r"
-    else:
-        f_str = "a"
+    f_str = "r" if read_only else "a"
 
     N = len(get_elements(fn, ret=True, path=path))
 
@@ -694,11 +686,8 @@ def shift_projections(fn, *, path=".", read_only=True):
 
 def find_center(fn, el, *, path="."):
 
-    fn = os.path.expanduser(fn)
-    path = os.path.abspath(os.path.expanduser(path))
-
-    if not os.path.isabs(fn):
-        fn = os.path.join(path, fn)
+    path = _process_dir(path)
+    fn = _process_fn(fn, fn_dir=path)
 
     elements = get_elements(fn, ret=True, path=path)
     try:
@@ -743,11 +732,9 @@ def make_volume(fn, *, path=".", algorithm="gridrec", rotation_center=None):
         rotation_center: float or None
             Overrides `rot_center` from HDF5 file. May be useful if the rotation center can not be estimated.
     """
-    fn = os.path.expanduser(fn)
-    path = os.path.abspath(os.path.expanduser(path))
 
-    if not os.path.isabs(fn):
-        fn = os.path.join(path, fn)
+    path = _process_dir(path)
+    fn = _process_fn(fn, fn_dir=path)
 
     elements = get_elements(fn, ret=True, path=path)
 
@@ -821,11 +808,8 @@ def make_volume_svmbir(
     except ImportError as ex:
         raise ImportError("'svmbir' package is not installed: {ex}") from ex
 
-    fn = os.path.expanduser(fn)
-    path = os.path.abspath(os.path.expanduser(path))
-
-    if not os.path.isabs(fn):
-        fn = os.path.join(path, fn)
+    path = _process_dir(path)
+    fn = _process_fn(fn, fn_dir=path)
 
     elements = get_elements(fn, ret=True, path=path)
 
@@ -904,12 +888,9 @@ def export_tiff_projs(fn, *, fn_dir=".", tiff_dir=".", el="all", raw=True):
         Select if the raw or processed data should be saved.
     """
 
-    fn = os.path.expanduser(fn)
-    fn_dir = os.path.abspath(os.path.expanduser(fn_dir))
-    tiff_dir = os.path.abspath(os.path.expanduser(tiff_dir))
-
-    if not os.path.isabs(fn):
-        fn = os.path.join(fn_dir, fn)
+    fn_dir = _process_dir(fn_dir)
+    fn = _process_fn(fn, fn_dir=fn_dir)
+    tiff_dir = _process_dir(tiff_dir)
 
     elements = get_elements(fn, ret=True, path=fn_dir)
     try:
@@ -950,12 +931,9 @@ def export_tiff_volumes(fn, *, fn_dir=".", tiff_dir=".", el="all"):
         Element or emission line to save to save.
     """
 
-    fn = os.path.expanduser(fn)
-    fn_dir = os.path.abspath(os.path.expanduser(fn_dir))
-    tiff_dir = os.path.abspath(os.path.expanduser(tiff_dir))
-
-    if not os.path.isabs(fn):
-        fn = os.path.join(fn_dir, fn)
+    fn_dir = _process_dir(fn_dir)
+    fn = _process_fn(fn, fn_dir=fn_dir)
+    tiff_dir = _process_dir(tiff_dir)
 
     elements = get_recon_elements(fn, ret=True, path=fn_dir)
     try:
