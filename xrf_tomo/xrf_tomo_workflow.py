@@ -156,11 +156,28 @@ def read_log_file(fn, *, wd="."):
     return pd.read_csv(fn, sep=",")
 
 
-def process_proj(*, wd=".", fn_param=None, fn_log="tomo_info.dat", ic_name="sclr_i0", save_tiff=False):
+def process_proj(
+    *, wd=".", fn_param=None, fn_log="tomo_info.dat", ic_name="sclr_i0", save_tiff=False, skip_processed=False
+):
     """
     Process the projections. ``wd`` is the directory that contains raw .h5 files,
     the parameter file and the log file. If ``fn_param`` and/or ``fn_log`` are relative
     paths, then ``wd`` is considered a root directory.
+
+    Parameters
+    ----------
+    wd: str
+        ``wd`` is the directory that contains raw .h5 files, the parameter file and the log file.
+    fn_param: str
+        name of the parameter file for XRF fitting (absolute or relative to ``wd``)
+    fn_log: str
+        name of the log file for tomography experiment (absolute or relative to ``wd``)
+    ic_name: str
+        name of the scaler for normalization of fluorescence data
+    save_tiff: boolean
+        save fitted maps as TIFF files after fitting if ``True``
+    skip_processed: boolean
+        skip fitting files that already contain fitted data (only new files are processed).
     """
     if fn_param is None:
         raise ValueError("The name of the file with fitting parameters ('fn_param') is not specified")
@@ -187,13 +204,18 @@ def process_proj(*, wd=".", fn_param=None, fn_log="tomo_info.dat", ic_name="sclr
     # Create dask client
     client = dask_client_create()
 
-    i = 0
-    for f in ls:
-        i = i + 1
-        print("Fitting spectra: %04d/%04d" % (i, N), end="\r")
-        fit_pixel_data_and_save(
-            wd, f, param_file_name=fn_param, scaler_name=ic_name, save_tiff=save_tiff, dask_client=client
-        )
+    for i, f in enumerate(ls):
+        print(f"Fitting spectra: {(i + 1):04d}/{N:04d} ('{f}')  ", end="")
+        with h5py.File(os.path.join(wd, f), "r") as h5file:
+            file_is_processed = "xrfmap/detsum/xrf_fit" in h5file
+
+        if file_is_processed and skip_processed:
+            print("File is already processed. Skipping ...")
+        else:
+            print("Processing ...")
+            fit_pixel_data_and_save(
+                wd, f, param_file_name=fn_param, scaler_name=ic_name, save_tiff=save_tiff, dask_client=client
+            )
 
     # Close the dask client
     client.close()
