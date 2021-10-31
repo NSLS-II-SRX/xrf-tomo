@@ -743,7 +743,19 @@ def align_seq(
     return prj, sx, sy, conv
 
 
-def find_alignment(fn, el, *, path="."):
+def find_alignment(fn, el, *, iters=10, algorithm="sirt", path="."):
+    """
+    Parameters
+    ----------
+    fn: str
+        Name of the single HDF5 file (absolute or relative to ``path``)
+    el: str
+        Element/emission line name to use for alignment
+    iters: int
+        The number of iterations of the alignment algorithm
+    path: str
+        Path to ``fn``. If ``fn`` is absolute path, then ``path`` is ignored.
+    """
 
     path = _process_dir(path)
     fn = _process_fn(fn, fn_dir=path)
@@ -762,7 +774,7 @@ def find_alignment(fn, el, *, path="."):
 
         # tomopy has an alignment method to reconstruct, back project, align, loop
         # aligned_proj, shift_y, shift_x, err = tomopy.prep.alignment.align_seq(proj, np.deg2rad(th))
-        aligned_proj, shift_y, shift_x, err = align_seq(proj, np.deg2rad(th))
+        aligned_proj, shift_y, shift_x, err = align_seq(proj, np.deg2rad(th), iters=iters, algorithm=algorithm)
 
         # Write shift
         try:
