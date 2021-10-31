@@ -232,6 +232,8 @@ def make_single_hdf(
     ic_name="i0",
     convert_theta=False,
     include_raw_data=False,
+    trim_vertical=(None, None),
+    trim_horizontal=(None, None),
 ):
     """
     Change to the working directory
@@ -253,6 +255,11 @@ def make_single_hdf(
         True - convert Theta from mdeg to deg by dividing by 1000, False - Theta is already deg
     include_raw_data: bool
         True - copy raw ('sum') data to the single HDF5 file, False - copy only fitted data (saves disk space)
+    trim_vertical: tuple(int)
+        Trim the image along vertical axis. E.g. ``(30, 100)`` leaves rows 30..99, ``(30, None)`` leaves all
+        rows starting with number 30.
+    trim_horizontal: tuple(int)
+        Trim the image along horizontal axis. Leaves columns with numbers in specified range.
     """
     wd_src = _process_dir(wd_src)
     fn_log = _process_fn(fn_log, fn_dir=wd_src)
@@ -281,6 +288,9 @@ def make_single_hdf(
         f.create_group("reconstruction/fitting")
         f.create_group("reconstruction/recon")
 
+        slice_vertical = slice(*trim_vertical)
+        slice_horizontal = slice(*trim_horizontal)
+
         # Load the data
         flag_first = True
         for i in range(num):
@@ -289,14 +299,14 @@ def make_single_hdf(
             with h5py.File(os.path.join(wd_src, fn_src), "r") as tmp_f:
                 if flag_first:
                     if include_raw_data:
-                        raw = tmp_f["xrfmap"]["detsum"]["counts"]
+                        raw = tmp_f["xrfmap"]["detsum"]["counts"][slice_vertical, slice_horizontal, :]
                         raw = np.expand_dims(raw, axis=0)
-                    xrf_fit = tmp_f["xrfmap"]["detsum"]["xrf_fit"]
+                    xrf_fit = tmp_f["xrfmap"]["detsum"]["xrf_fit"][:, slice_vertical, slice_horizontal]
                     xrf_fit = np.expand_dims(xrf_fit, axis=0)
                     xrf_fit_names = np.array(tmp_f["xrfmap"]["detsum"]["xrf_fit_name"])
-                    x = tmp_f["xrfmap"]["positions"]["pos"][1, :]
+                    x = tmp_f["xrfmap"]["positions"]["pos"][1, slice_vertical, slice_horizontal]
                     x = np.expand_dims(x, axis=0)
-                    y = tmp_f["xrfmap"]["positions"]["pos"][0, :]
+                    y = tmp_f["xrfmap"]["positions"]["pos"][0, slice_vertical, slice_horizontal]
                     y = np.expand_dims(y, axis=0)
 
                     scaler_names = tmp_f["xrfmap"]["scalers"]["name"]
@@ -305,7 +315,7 @@ def make_single_hdf(
                         scaler_ind = scaler_names.index(ic_name)
                     except ValueError:
                         raise RuntimeError(f"Scaler '{ic_name}' is not found. Available scalers: {scaler_names}")
-                    i0 = tmp_f["xrfmap"]["scalers"]["val"][:, :, scaler_ind]
+                    i0 = tmp_f["xrfmap"]["scalers"]["val"][slice_vertical, slice_horizontal, scaler_ind]
                     i0 = np.expand_dims(i0, axis=0)
 
                     if include_raw_data:
@@ -337,11 +347,13 @@ def make_single_hdf(
                     flag_first = False
                 else:
                     if include_raw_data:
-                        f_raw[i, :, :, :] = tmp_f["xrfmap"]["detsum"]["counts"]
-                    f_fit[i, :, :, :] = tmp_f["xrfmap"]["detsum"]["xrf_fit"]
-                    f_x[i, :, :] = tmp_f["xrfmap"]["positions"]["pos"][1, :]
-                    f_y[i, :, :] = tmp_f["xrfmap"]["positions"]["pos"][0, :]
-                    f_i0[i, :, :] = tmp_f["xrfmap"]["scalers"]["val"][:, :, 0]
+                        f_raw[i, :, :, :] = tmp_f["xrfmap"]["detsum"]["counts"][
+                            slice_vertical, slice_horizontal, :
+                        ]
+                    f_fit[i, :, :, :] = tmp_f["xrfmap"]["detsum"]["xrf_fit"][:, slice_vertical, slice_horizontal]
+                    f_x[i, :, :] = tmp_f["xrfmap"]["positions"]["pos"][1, slice_vertical, slice_horizontal]
+                    f_y[i, :, :] = tmp_f["xrfmap"]["positions"]["pos"][0, slice_vertical, slice_horizontal]
+                    f_i0[i, :, :] = tmp_f["xrfmap"]["scalers"]["val"][slice_vertical, slice_horizontal, scaler_ind]
 
 
 def align_proj_com(fn, element="all", *, path="."):
