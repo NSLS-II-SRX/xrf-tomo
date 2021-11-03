@@ -7,7 +7,7 @@ jobs:
     env:
       DISPLAY: ":99.0"  # arbitrary
       # GSETTINGS_SCHEMA_DIR_CONDA_BACKUP is somehow related to the following issue https://github.com/conda/conda/issues/9966
-      GSETTINGS_SCHEMA_DIR_CONDA_BACKUP: "/usr/share/miniconda/envs/testenv/share/glib-2.0/schemas"
+      # GSETTINGS_SCHEMA_DIR_CONDA_BACKUP: "/usr/share/miniconda/envs/testenv/share/glib-2.0/schemas"
 
     runs-on: ubuntu-latest
     strategy:
@@ -39,7 +39,7 @@ jobs:
 
     - name: Install Conda packages
       run: |
-        set -vxeuo pipefail
+        set -vxeo pipefail  # -u is removed (substitute unset EVs with blanks)
 
         conda install -y \
           python=${{ matrix.python-version }} \
