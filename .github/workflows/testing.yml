@@ -1,0 +1,102 @@
+name: Unit Tests
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    env:
+      DISPLAY: ":99.0"  # arbitrary
+      # GSETTINGS_SCHEMA_DIR_CONDA_BACKUP is somehow related to the following issue https://github.com/conda/conda/issues/9966
+      # GSETTINGS_SCHEMA_DIR_CONDA_BACKUP: "/usr/share/miniconda/envs/testenv/share/glib-2.0/schemas"
+
+    strategy:
+      matrix:
+        python-version: [3.7, 3.8, 3.9]
+        # host-os: ["ubuntu-latest"]
+        host-os: ["ubuntu-latest", "macos-latest", "windows-latest"]
+      fail-fast: false
+
+    runs-on: ${{ matrix.host-os }}
+
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Set up Python 3.9
+      uses: actions/setup-python@v2
+      with:
+        python-version: 3.9
+
+    - uses: conda-incubator/setup-miniconda@v2
+      with:
+        channels: conda-forge
+        channel-priority: flexible
+        auto-update-conda: true
+        show-channel-urls: true
+        allow-softlinks: true
+        auto-activate-base: false
+        activate-environment: testenv
+        use-only-tar-bz2: false
+
+    - name: Install Conda packages
+      run: |
+        set -vxeo pipefail  # -u is removed (substitute unset EVs with blanks)
+
+        conda install -y \
+          python=${{ matrix.python-version }} \
+          pip \
+          tomopy \
+          pyxrf \
+          -c conda-forge
+
+        conda list
+        pip list
+
+    - name: Update packages
+      run: |
+        set -vxeuo pipefail
+
+        python -m pip install --upgrade pip setuptools
+
+    - name: Install 'svmbir' - Linux
+      if: matrix.host-os == 'ubuntu-latest'
+      run: |
+        set -vxeuo pipefail
+
+        pip install svmbir
+
+    - name: Install 'svmbir' - Mac OS
+      if: matrix.host-os == 'macos-latest'
+      run: |
+        set -vxeuo pipefail
+
+        ln -sf /usr/local/bin/gcc-10 /usr/local/bin/gcc
+        gcc --version
+        CC=gcc pip install --no-binary svmbir svmbir
+
+    - name: Install 'svmbir' - Windows
+      if: matrix.host-os == 'windows-latest'
+      run: |
+        set -vxeuo pipefail
+
+        CC=msvc pip install svmbir
+
+    - name: Install PyPI packages
+      run: |
+        set -vxeuo pipefail
+
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
+        pip install .
+
+        conda list
+        pip list
+        python --version
+
+    - name: Test with pytest
+      run: |
+        set -vxeuo pipefail
+        coverage run -m pytest -vvv
+        coverage report -m

@@ -1,0 +1,72 @@
+name: Documentation
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    env:
+      DISPLAY: ":99.0"  # arbitrary
+      # GSETTINGS_SCHEMA_DIR_CONDA_BACKUP is somehow related to the following issue https://github.com/conda/conda/issues/9966
+      # GSETTINGS_SCHEMA_DIR_CONDA_BACKUP: "/usr/share/miniconda/envs/testenv/share/glib-2.0/schemas"
+
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.8]
+      fail-fast: false
+
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Set up Python 3.9
+      uses: actions/setup-python@v2
+      with:
+        python-version: 3.9
+
+    - uses: conda-incubator/setup-miniconda@v2
+      with:
+        channels: conda-forge
+        channel-priority: flexible
+        auto-update-conda: true
+        show-channel-urls: true
+        allow-softlinks: true
+        auto-activate-base: false
+        activate-environment: testenv
+        use-only-tar-bz2: false
+
+    - name: Install Conda packages
+      run: |
+        set -vxeo pipefail  # -u is removed (substitute unset EVs with blanks)
+
+        conda install -y \
+          python=${{ matrix.python-version }} \
+          pip \
+          tomopy \
+          pyxrf \
+          -c conda-forge
+
+        conda list
+        pip list
+
+    - name: Install PyPI packages
+      run: |
+        set -vxeuo pipefail
+
+        python -m pip install --upgrade pip setuptools
+
+        pip install svmbir  # Optional package
+
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
+        pip install .
+
+        conda list
+        pip list
+        python --version
+
+    - name: Build Docs
+      run: |
+        make -C docs/ html
