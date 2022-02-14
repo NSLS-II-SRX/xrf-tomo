@@ -81,7 +81,8 @@ jobs:
       run: |
         set -vxeuo pipefail
 
-        CC=msvc pip install svmbir
+        # CC=msvc pip install svmbir
+        conda install svmbir -c conda-forge
 
     - name: Install PyPI packages
       run: |
