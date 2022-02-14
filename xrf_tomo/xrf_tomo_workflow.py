@@ -1,22 +1,167 @@
-import tomopy  # this is supposed to be imported before numpy
 import os
 
-# import dxchange
+import tomopy  # this is supposed to be imported before numpy
+from tomopy.prep.alignment import align_seq, align_joint
+
 import h5py
 import numpy as np
 import pandas as pd
 import glob
 import time as ttime
 
+from packaging import version
+from pystackreg import StackReg
+
 from scipy.ndimage import center_of_mass
 import skimage.io as io
 import skimage.transform as tf
 from skimage.registration import phase_cross_correlation
 
-from tomopy.util.misc import write_tiff
-
 from pyxrf.api_dev import make_hdf, dask_client_create, fit_pixel_data_and_save
 from pyxrf.core.utils import convert_time_from_nexus_string
+
+
+if version.parse(tomopy.__version__) < version.parse("1.11.0"):
+
+    from tomopy.util.misc import write_tiff
+
+    # Fix the bug for 'align_seq' in older versions of tomopy
+    def align_seq(  # noqa: F811
+        prj,
+        ang,
+        fdir=".",
+        iters=10,
+        pad=(0, 0),
+        blur=True,
+        center=None,
+        algorithm="sirt",
+        upsample_factor=10,
+        rin=0.5,
+        rout=0.8,
+        save=False,
+        debug=True,
+    ):
+        """
+        Aligns the projection image stack using the sequential
+        re-projection algorithm :cite:`Gursoy:17`.
+
+        Parameters
+        ----------
+        prj : ndarray
+            3D stack of projection images. The first dimension
+            is projection axis, second and third dimensions are
+            the x- and y-axes of the projection image, respectively.
+        ang : ndarray
+            Projection angles in radians as an array.
+        iters : scalar, optional
+            Number of iterations of the algorithm.
+        pad : list-like, optional
+            Padding for projection images in x and y-axes.
+        blur : bool, optional
+            Blurs the edge of the image before registration.
+        center: array, optional
+            Location of rotation axis.
+        algorithm : {str, function}
+            One of the following string values.
+
+            'art'
+                Algebraic reconstruction technique :cite:`Kak:98`.
+            'gridrec'
+                Fourier grid reconstruction algorithm :cite:`Dowd:99`,
+                :cite:`Rivers:06`.
+            'mlem'
+                Maximum-likelihood expectation maximization algorithm
+                :cite:`Dempster:77`.
+            'sirt'
+                Simultaneous algebraic reconstruction technique.
+            'tv'
+                Total Variation reconstruction technique
+                :cite:`Chambolle:11`.
+            'grad'
+                Gradient descent method with a constant step size
+
+        upsample_factor : integer, optional
+            The upsampling factor. Registration accuracy is
+            inversely propotional to upsample_factor.
+        rin : scalar, optional
+            The inner radius of blur function. Pixels inside
+            rin is set to one.
+        rout : scalar, optional
+            The outer radius of blur function. Pixels outside
+            rout is set to zero.
+        save : bool, optional
+            Saves projections and corresponding reconstruction
+            for each algorithm iteration.
+        debug : book, optional
+            Provides debugging info such as iterations and error.
+
+        Returns
+        -------
+        ndarray
+            3D stack of projection images with jitter.
+        ndarray
+            Error array for each iteration.
+        """
+
+        # Needs scaling for skimage float operations.
+        prj, scl = tomopy.prep.alignment.scale(prj)
+
+        # Shift arrays
+        sx = np.zeros((prj.shape[0]))
+        sy = np.zeros((prj.shape[0]))
+
+        conv = np.zeros((iters))
+
+        # Pad images.
+        npad = ((0, 0), (pad[1], pad[1]), (pad[0], pad[0]))
+        prj = np.pad(prj, npad, mode="constant", constant_values=0)
+
+        # Register each image frame-by-frame.
+        for n in range(iters):
+            # Reconstruct image.
+            rec = tomopy.recon(prj, ang, center=center, algorithm=algorithm)
+
+            # Re-project data and obtain simulated data.
+            sim = tomopy.project(rec, ang, center=center, pad=False)
+
+            # Blur edges.
+            if blur:
+                _prj = tomopy.blur_edges(prj, rin, rout)
+                _sim = tomopy.blur_edges(sim, rin, rout)
+            else:
+                _prj = prj
+                _sim = sim
+
+            # Initialize error matrix per iteration.
+            err = np.zeros((prj.shape[0]))
+
+            # For each projection
+            for m in range(prj.shape[0]):
+
+                # Register current projection in sub-pixel precision
+                shift, error, diffphase = phase_cross_correlation(
+                    _prj[m], _sim[m], upsample_factor=upsample_factor
+                )
+                err[m] = np.sqrt(shift[0] * shift[0] + shift[1] * shift[1])
+                sx[m] += shift[0]
+                sy[m] += shift[1]
+
+                # Register current image with the simulated one
+                tform = tf.SimilarityTransform(translation=(shift[1], shift[0]))
+                prj[m] = tf.warp(prj[m], tform, order=5)
+
+            if debug:
+                print("iter=" + str(n) + ", err=" + str(np.linalg.norm(err)))
+                conv[n] = np.linalg.norm(err)
+
+            if save:
+                write_tiff(prj, fdir + "/tmp/iters/prj", n)
+                write_tiff(sim, fdir + "/tmp/iters/sim", n)
+                write_tiff(rec, fdir + "/tmp/iters/rec", n)
+
+        # Re-normalize data
+        prj *= scl
+        return prj, sx, sy, conv
 
 
 def _process_fn(fn, *, fn_dir="."):
@@ -66,7 +211,7 @@ def create_log_file(*, fn_log="tomo_info.dat", wd=".", hdf5_ext="h5"):
         "scan_time_start",
         "scan_id",
         "param_theta",
-        "param_theta",
+        "param_theta_units",
         "param_input",
         "scan_uid",
         "scan_exit_status",
@@ -95,6 +240,10 @@ def create_log_file(*, fn_log="tomo_info.dat", wd=".", hdf5_ext="h5"):
                 )
 
             mdata_selected = {_: mdata[_] for _ in mdata_keys}
+            if mdata_selected["param_theta_units"] == "mdeg":
+                mdata_selected["param_theta"] /= 1000
+                mdata_selected["param_theta_units"] == "deg"
+
             hdf5_mdata[os.path.basename(hdf5_fn)] = mdata_selected
 
         except Exception as ex:
@@ -127,7 +276,7 @@ def create_log_file(*, fn_log="tomo_info.dat", wd=".", hdf5_ext="h5"):
                 ttime.strftime("%a %b %d %H:%M:%S %Y", convert_time_from_nexus_string(md["scan_time_start"])),
                 md["scan_id"],
                 np.round(md["param_theta"], 3),
-                "x",
+                "1",
                 hdf5_fn,
                 *[np.round(_, 3) for _ in md["param_input"][0:7]],
                 md["scan_uid"],
@@ -153,7 +302,19 @@ def read_log_file(fn, *, wd="."):
         Directory that contains the log file. If ``fn`` is absolute path, then ``wd`` is ignored.
     """
     fn = _process_fn(fn, fn_dir=wd)
-    return pd.read_csv(fn, sep=",")
+    df = pd.read_csv(fn, sep=",")
+
+    use = df["Use"]
+    for n in range(len(use)):
+        if isinstance(use[n], str):
+            # Manually created config files may contain values in 'Use' column represented as strings.
+            # Convert values in 'Use' column from strings ("x"/"0") to booleans
+            use[n] = True if (use[n] == "x") else False
+        else:
+            # Convert integers (1/0) to booleans
+            use[n] = bool(use[n])
+
+    return df
 
 
 def process_proj(
@@ -191,7 +352,7 @@ def process_proj(
     log = read_log_file(fn_log, wd=wd)
 
     # Filter results
-    log = log[log["Use"] == "x"]
+    log = log[log["Use"]]
 
     # Identify the files
     ls = list(log["Filename"])
@@ -230,7 +391,7 @@ def make_single_hdf(
     wd_src=".",
     wd_dest=".",
     ic_name="i0",
-    convert_theta=False,
+    theta_in_mdeg=False,
     include_raw_data=False,
     trim_vertical=(None, None),
     trim_horizontal=(None, None),
@@ -251,8 +412,11 @@ def make_single_hdf(
         then ``wd_dest`` is ignored.
     ic_name: str
         name of the scaler for normalization of fluorescence data
-    convert_theta: bool
-        True - convert Theta from mdeg to deg by dividing by 1000, False - Theta is already deg
+    theta_in_mdeg: bool
+        If 'theta' in log file is in mdeg, then set this parameter to ``True``, otherwise leave the
+        default value ``False``. If the parameter is ``True``, then the values of theta are converted from
+        mdeg to deg before they are saved to the single HDF5 file. It is expected that the HDF5 file will
+        always have theta values in degrees.
     include_raw_data: bool
         True - copy raw ('sum') data to the single HDF5 file, False - copy only fitted data (saves disk space)
     trim_vertical: tuple(int)
@@ -270,7 +434,7 @@ def make_single_hdf(
     log = read_log_file(fn_log, wd=wd_src)
 
     # Filter and sort results
-    log = log[log["Use"] == "x"]
+    log = log[log["Use"]]
     log = log.sort_values(by=["Theta"])
 
     th = log["Theta"].values
@@ -323,7 +487,7 @@ def make_single_hdf(
                             "/exchange/raw", data=raw, maxshape=(num, *raw.shape[1:]), compression="gzip"
                         )
                         f_raw.resize(num, axis=0)
-                    if convert_theta:
+                    if theta_in_mdeg:
                         f.create_dataset("/exchange/theta", data=th / 1000)  # mdeg -> deg
                     else:
                         f.create_dataset("/exchange/theta", data=th)
@@ -606,144 +770,7 @@ def find_element(el, *, elements, select_all_elements="all"):
     return el_ind
 
 
-# Overwriting the align_seq from tomopy
-def align_seq(
-    prj,
-    ang,
-    fdir=".",
-    iters=10,
-    pad=(0, 0),
-    blur=True,
-    center=None,
-    algorithm="sirt",
-    upsample_factor=10,
-    rin=0.5,
-    rout=0.8,
-    save=False,
-    debug=True,
-):
-    """
-    Aligns the projection image stack using the sequential
-    re-projection algorithm :cite:`Gursoy:17`.
-
-    Parameters
-    ----------
-    prj : ndarray
-        3D stack of projection images. The first dimension
-        is projection axis, second and third dimensions are
-        the x- and y-axes of the projection image, respectively.
-    ang : ndarray
-        Projection angles in radians as an array.
-    iters : scalar, optional
-        Number of iterations of the algorithm.
-    pad : list-like, optional
-        Padding for projection images in x and y-axes.
-    blur : bool, optional
-        Blurs the edge of the image before registration.
-    center: array, optional
-        Location of rotation axis.
-    algorithm : {str, function}
-        One of the following string values.
-
-        'art'
-            Algebraic reconstruction technique :cite:`Kak:98`.
-        'gridrec'
-            Fourier grid reconstruction algorithm :cite:`Dowd:99`,
-            :cite:`Rivers:06`.
-        'mlem'
-            Maximum-likelihood expectation maximization algorithm
-            :cite:`Dempster:77`.
-        'sirt'
-            Simultaneous algebraic reconstruction technique.
-        'tv'
-            Total Variation reconstruction technique
-            :cite:`Chambolle:11`.
-        'grad'
-            Gradient descent method with a constant step size
-
-    upsample_factor : integer, optional
-        The upsampling factor. Registration accuracy is
-        inversely propotional to upsample_factor.
-    rin : scalar, optional
-        The inner radius of blur function. Pixels inside
-        rin is set to one.
-    rout : scalar, optional
-        The outer radius of blur function. Pixels outside
-        rout is set to zero.
-    save : bool, optional
-        Saves projections and corresponding reconstruction
-        for each algorithm iteration.
-    debug : book, optional
-        Provides debugging info such as iterations and error.
-
-    Returns
-    -------
-    ndarray
-        3D stack of projection images with jitter.
-    ndarray
-        Error array for each iteration.
-    """
-
-    # Needs scaling for skimage float operations.
-    prj, scl = tomopy.prep.alignment.scale(prj)
-
-    # Shift arrays
-    sx = np.zeros((prj.shape[0]))
-    sy = np.zeros((prj.shape[0]))
-
-    conv = np.zeros((iters))
-
-    # Pad images.
-    npad = ((0, 0), (pad[1], pad[1]), (pad[0], pad[0]))
-    prj = np.pad(prj, npad, mode="constant", constant_values=0)
-
-    # Register each image frame-by-frame.
-    for n in range(iters):
-        # Reconstruct image.
-        rec = tomopy.recon(prj, ang, center=center, algorithm=algorithm)
-
-        # Re-project data and obtain simulated data.
-        sim = tomopy.project(rec, ang, center=center, pad=False)
-
-        # Blur edges.
-        if blur:
-            _prj = tomopy.blur_edges(prj, rin, rout)
-            _sim = tomopy.blur_edges(sim, rin, rout)
-        else:
-            _prj = prj
-            _sim = sim
-
-        # Initialize error matrix per iteration.
-        err = np.zeros((prj.shape[0]))
-
-        # For each projection
-        for m in range(prj.shape[0]):
-
-            # Register current projection in sub-pixel precision
-            shift, error, diffphase = phase_cross_correlation(_prj[m], _sim[m], upsample_factor=upsample_factor)
-            err[m] = np.sqrt(shift[0] * shift[0] + shift[1] * shift[1])
-            sx[m] += shift[0]
-            sy[m] += shift[1]
-
-            # Register current image with the simulated one
-            tform = tf.SimilarityTransform(translation=(shift[1], shift[0]))
-            prj[m] = tf.warp(prj[m], tform, order=5)
-
-        if debug:
-            print("iter=" + str(n) + ", err=" + str(np.linalg.norm(err)))
-            conv[n] = np.linalg.norm(err)
-
-        if save:
-            write_tiff(prj, fdir + "/tmp/iters/prj", n)
-            write_tiff(sim, fdir + "/tmp/iters/sim", n)
-            write_tiff(rec, fdir + "/tmp/iters/rec", n)
-
-    # Re-normalize data
-    prj *= scl
-    return prj, sx, sy, conv
-
-
-def find_alignment(fn, el, *, iters=10, algorithm="sirt", path="."):
+def find_alignment(fn, el, *, iters=10, algorithm="sirt", alignment_algorithm="align_seq", path="."):
     """
     Parameters
     ----------
@@ -756,9 +783,15 @@ def find_alignment(fn, el, *, iters=10, algorithm="sirt", path="."):
     path: str
         Path to ``fn``. If ``fn`` is absolute path, then ``path`` is ignored.
     """
-
     path = _process_dir(path)
     fn = _process_fn(fn, fn_dir=path)
+
+    if alignment_algorithm == "align_seq":
+        alignment_func = align_seq
+    elif alignment_algorithm == "align_joint":
+        alignment_func = align_joint
+    else:
+        raise ValueError(f"Unsupported alignment algorithm: {alignment_algorithm!r}")
 
     elements = get_elements(fn, ret=True, path=path)
     try:
@@ -771,10 +804,9 @@ def find_alignment(fn, el, *, iters=10, algorithm="sirt", path="."):
         proj = np.copy(f["/reconstruction/recon/proj"][:, el_ind, :, :])
         proj = np.swapaxes(proj, 1, 2)
         th = np.copy(f["/exchange/theta"])
-
-        # tomopy has an alignment method to reconstruct, back project, align, loop
-        # aligned_proj, shift_y, shift_x, err = tomopy.prep.alignment.align_seq(proj, np.deg2rad(th))
-        aligned_proj, shift_y, shift_x, err = align_seq(proj, np.deg2rad(th), iters=iters, algorithm=algorithm)
+        aligned_proj, shift_y, shift_x, err = alignment_func(
+            proj, np.deg2rad(th), iters=iters, algorithm=algorithm
+        )
 
         # Write shift
         try:
@@ -838,6 +870,72 @@ def shift_projections(fn, *, path=".", read_only=True):
 
     if read_only:
         return proj
+
+
+def _align_stack(stack_img, ref_stack=None, transformation=StackReg.TRANSLATION, reference="previous"):
+    """
+    Image registration flow using pystack reg
+    """
+
+    sr = StackReg(transformation)
+
+    if ref_stack is None:
+        tmats_ = sr.register_stack(stack_img, reference=reference)
+    else:
+        tmats_ = sr.register_stack(ref_stack, reference=reference)
+
+    out_stk = sr.transform_stack(stack_img, tmats=tmats_)
+    return np.float32(out_stk), tmats_
+
+
+def align_projections_pystackreg(fn, el, *, path=".", reverse=False):
+    """
+    Alignment of projections using ``pystackreg``. The projections are loaded
+    from ``/reconstruction/recon/proj`` and saved to the original locations.
+    Shift values ``/reconstruction/recon/del_x`` and ``/reconstruction/recon/del_y``
+    are not used, saved or modified.
+
+    Parameters
+    ----------
+    fn: str
+        Name of the single HDF5 file (absolute or relative)
+    el: str
+        Emissions line used as a reference for alignment of data for the rest of emission lines.
+    path: str
+        Path to file ``fn``. If ``fn`` is an absolute path, ``path`` is ignored.
+    reverse: boolean
+        Indicates if the projections are processed in reverse order.
+    """
+    path = _process_dir(path)
+    fn = _process_fn(fn, fn_dir=path)
+
+    elements = get_elements(fn, ret=True, path=path)
+    try:
+        el_ind = find_element(el, elements=elements)
+    except IndexError as ex:
+        print(f"Exception: {ex}.")
+        return
+
+    with h5py.File(fn, "a") as f:
+        projections = f["/reconstruction/recon/proj"]
+        n_elements = projections.shape[1]
+        proj_el = np.copy(projections[:, el_ind, :, :])
+        proj_el = np.squeeze(proj_el)
+
+        if reverse:
+            proj_el = np.flip(proj_el, 0)
+
+        for n in range(n_elements):
+            proj = np.copy(projections[:, n, :, :])
+            proj = np.squeeze(proj)
+            if reverse:
+                proj = np.flip(proj, 0)
+
+            proj_aligned, _ = _align_stack(proj, ref_stack=proj_el)
+            if reverse:
+                proj_aligned = np.flip(proj_aligned, 0)
+
+            projections[:, n, :, :] = proj_aligned
 
 
 def find_center(fn, el, *, path="."):
