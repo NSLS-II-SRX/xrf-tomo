@@ -824,12 +824,25 @@ def find_alignment(fn, el, *, iters=10, algorithm="sirt", alignment_algorithm="a
             dset[...] = shift_y
 
 
-def normalize_projections(fn, *, path="."):
+def normalize_projections(fn, *, path=".", normalize_by_element=None):
+    """
+    normalize_by_element: str or None
+        Emission line (e.g. Ar_K) or None
+    """
 
     path = _process_dir(path)
     fn = _process_fn(fn, fn_dir=path)
 
     N = len(get_elements(fn, ret=True, path=path))
+
+    el_ind = None
+    if normalize_by_element:
+        elements = get_elements(fn, ret=True, path=path)
+        try:
+            el_ind = find_element(normalize_by_element, elements=elements)
+        except IndexError as ex:
+            print(f"Exception: {ex}.")
+            return
 
     with h5py.File(fn, "a") as f:
         proj = f["/reconstruction/fitting/data"]
@@ -842,9 +855,15 @@ def normalize_projections(fn, *, path="."):
             dset = f["reconstruction"]["recon"]["proj"]
             dset[...] = proj
 
+        if el_ind is not None:
+            el_norm = dset[:, el_ind, :, :]
+
         for i in range(N):
             II = dset[:, i, :, :]
-            Inorm = II / i0
+            if el_ind:
+                Inorm = II / el_norm
+            else:
+                Inorm = II / i0
             Inorm = tomopy.misc.corr.remove_nan(Inorm, val=0)
             dset[:, i, :, :] = Inorm
 
