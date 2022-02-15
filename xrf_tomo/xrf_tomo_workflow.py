@@ -21,6 +21,9 @@ from pyxrf.api_dev import make_hdf, dask_client_create, fit_pixel_data_and_save
 from pyxrf.core.utils import convert_time_from_nexus_string
 
 
+default_log_file_name = "tomo_info.dat"
+
+
 if version.parse(tomopy.__version__) < version.parse("1.11.0"):
 
     from tomopy.util.misc import write_tiff
@@ -196,7 +199,7 @@ def grab_proj(start, end=None, *, wd="."):
     make_hdf(start, end=end, wd=wd)
 
 
-def create_log_file(*, fn_log="tomo_info.dat", wd=".", hdf5_ext="h5"):
+def create_log_file(*, fn_log=default_log_file_name, wd=".", hdf5_ext="h5"):
     """
     Create log file ``fn`` based on the files contained in ``wd``. If ``fn``
     is a relative path, it is assumed that the root is in ``wd``.
@@ -318,7 +321,7 @@ def read_log_file(fn, *, wd="."):
 
 
 def process_proj(
-    *, wd=".", fn_param=None, fn_log="tomo_info.dat", ic_name="i0", save_tiff=False, skip_processed=False
+    *, wd=".", fn_param=None, fn_log=default_log_file_name, ic_name="i0", save_tiff=False, skip_processed=False
 ):
     """
     Process the projections. ``wd`` is the directory that contains raw .h5 files,
@@ -387,7 +390,7 @@ def process_proj(
 def make_single_hdf(
     fn,
     *,
-    fn_log="tomo_info.dat",
+    fn_log=default_log_file_name,
     wd_src=".",
     wd_dest=".",
     ic_name="i0",
