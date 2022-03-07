@@ -242,7 +242,7 @@ def create_log_file(*, fn_log="tomo_info.dat", wd=".", hdf5_ext="h5"):
             mdata_selected = {_: mdata[_] for _ in mdata_keys}
             if mdata_selected["param_theta_units"] == "mdeg":
                 mdata_selected["param_theta"] /= 1000
-                mdata_selected["param_theta_units"] == "deg"
+                mdata_selected["param_theta_units"] = "deg"
 
             hdf5_mdata[os.path.basename(hdf5_fn)] = mdata_selected
 
