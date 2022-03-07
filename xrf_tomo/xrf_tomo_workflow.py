@@ -24,7 +24,7 @@ from pyxrf.core.utils import convert_time_from_nexus_string
 default_log_file_name = "tomo_info.dat"
 
 
-if version.parse(tomopy.__version__) < version.parse("1.11.0"):
+if True or version.parse(tomopy.__version__) < version.parse("1.11.0"):
 
     from tomopy.util.misc import write_tiff
 
@@ -124,6 +124,8 @@ if version.parse(tomopy.__version__) < version.parse("1.11.0"):
             # Reconstruct image.
             rec = tomopy.recon(prj, ang, center=center, algorithm=algorithm)
 
+            rec = np.clip(rec, a_min=0, a_max=None)  # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
             # Re-project data and obtain simulated data.
             sim = tomopy.project(rec, ang, center=center, pad=False)
 
@@ -146,6 +148,11 @@ if version.parse(tomopy.__version__) < version.parse("1.11.0"):
                     _prj[m], _sim[m], upsample_factor=upsample_factor
                 )
                 err[m] = np.sqrt(shift[0] * shift[0] + shift[1] * shift[1])
+
+                shift[0] = 0  ##
+                shift[1] = 0  ##
+                print(f"shift: {shift} {shift[1]} {shift[0]}")  ##
+
                 sx[m] += shift[0]
                 sy[m] += shift[1]
 
@@ -161,6 +168,147 @@ if version.parse(tomopy.__version__) < version.parse("1.11.0"):
                 write_tiff(prj, fdir + "/tmp/iters/prj", n)
                 write_tiff(sim, fdir + "/tmp/iters/sim", n)
                 write_tiff(rec, fdir + "/tmp/iters/rec", n)
+                write_tiff(_prj, fdir + "/tmp/iters/_prj", n)  ##
+                write_tiff(_sim, fdir + "/tmp/iters/_sim", n)  ##
+
+        # Re-normalize data
+        prj *= scl
+        return prj, sx, sy, conv
+
+
+    def align_joint(
+            prj, ang, fdir='.', iters=10, pad=(0, 0),
+            blur=True, center=None, algorithm='sirt',
+            upsample_factor=10, rin=0.5, rout=0.8,
+            save=False, debug=True):
+        """
+        Aligns the projection image stack using the joint
+        re-projection algorithm :cite:`Gursoy:17`.
+
+        Parameters
+        ----------
+        prj : ndarray
+            3D stack of projection images. The first dimension
+            is projection axis, second and third dimensions are
+            the x- and y-axes of the projection image, respectively.
+        ang : ndarray
+            Projection angles in radians as an array.
+        iters : scalar, optional
+            Number of iterations of the algorithm.
+        pad : list-like, optional
+            Padding for projection images in x and y-axes.
+        blur : bool, optional
+            Blurs the edge of the image before registration.
+        center: array, optional
+            Location of rotation axis.
+        algorithm : {str, function}
+            One of the following string values.
+
+            'art'
+                Algebraic reconstruction technique :cite:`Kak:98`.
+            'gridrec'
+                Fourier grid reconstruction algorithm :cite:`Dowd:99`,
+                :cite:`Rivers:06`.
+            'mlem'
+                Maximum-likelihood expectation maximization algorithm
+                :cite:`Dempster:77`.
+            'sirt'
+                Simultaneous algebraic reconstruction technique.
+            'tv'
+                Total Variation reconstruction technique
+                :cite:`Chambolle:11`.
+            'grad'
+                Gradient descent method with a constant step size
+
+        upsample_factor : integer, optional
+            The upsampling factor. Registration accuracy is
+            inversely propotional to upsample_factor.
+        rin : scalar, optional
+            The inner radius of blur function. Pixels inside
+            rin is set to one.
+        rout : scalar, optional
+            The outer radius of blur function. Pixels outside
+            rout is set to zero.
+        save : bool, optional
+            Saves projections and corresponding reconstruction
+            for each algorithm iteration.
+        debug : book, optional
+            Provides debugging info such as iterations and error.
+
+        Returns
+        -------
+        ndarray
+            3D stack of projection images with jitter.
+        ndarray
+            Error array for each iteration.
+        """
+
+        # Needs scaling for skimage float operations.
+        prj, scl = tomopy.prep.alignment.scale(prj)
+
+        # Shift arrays
+        sx = np.zeros((prj.shape[0]))
+        sy = np.zeros((prj.shape[0]))
+
+        conv = np.zeros((iters))
+
+        # Pad images.
+        npad = ((0, 0), (pad[1], pad[1]), (pad[0], pad[0]))
+        prj = np.pad(prj, npad, mode='constant', constant_values=0)
+
+        # Initialization of reconstruction.
+        rec = 1e-12 * np.ones((prj.shape[1], prj.shape[2], prj.shape[2]))
+
+        extra_kwargs = {}
+        if algorithm != 'gridrec':
+            extra_kwargs['num_iter'] = 1
+
+        # Register each image frame-by-frame.
+        for n in range(iters):
+
+            if np.mod(n, 1) == 0:
+                _rec = rec
+
+            # Reconstruct image.
+            rec = tomopy.recon(prj, ang, center=center, algorithm=algorithm,
+                               init_recon=_rec, **extra_kwargs)
+
+            # Re-project data and obtain simulated data.
+            sim = tomopy.project(rec, ang, center=center, pad=False)
+
+            # Blur edges.
+            if blur:
+                _prj = tomopy.blur_edges(prj, rin, rout)
+                _sim = tomopy.blur_edges(sim, rin, rout)
+            else:
+                _prj = prj
+                _sim = sim
+
+            # Initialize error matrix per iteration.
+            err = np.zeros((prj.shape[0]))
+
+            # For each projection
+            for m in range(prj.shape[0]):
+
+                # Register current projection in sub-pixel precision
+                shift, error, diffphase = phase_cross_correlation(
+                        _prj[m], _sim[m], upsample_factor=upsample_factor)
+                err[m] = np.sqrt(shift[0]*shift[0] + shift[1]*shift[1])
+                sx[m] += shift[0]
+                sy[m] += shift[1]
+
+                # Register current image with the simulated one
+                tform = tf.SimilarityTransform(translation=(shift[1], shift[0]))
+                prj[m] = tf.warp(prj[m], tform, order=5)
+
+            if debug:
+                print('iter=' + str(n) + ', err=' + str(np.linalg.norm(err)))
+                conv[n] = np.linalg.norm(err)
+
+            if save:
+                write_tiff(prj, 'tmp/iters/prj', n)
+                write_tiff(sim, 'tmp/iters/sim', n)
+                write_tiff(rec, 'tmp/iters/rec', n)
 
         # Re-normalize data
         prj *= scl
@@ -773,7 +921,7 @@ def find_element(el, *, elements, select_all_elements="all"):
     return el_ind
 
 
-def find_alignment(fn, el, *, iters=10, algorithm="sirt", alignment_algorithm="align_seq", path="."):
+def find_alignment(fn, el, *, iters=10, algorithm="sirt", center=None, save=False, alignment_algorithm="align_seq", path="."):
     """
     Parameters
     ----------
@@ -805,10 +953,10 @@ def find_alignment(fn, el, *, iters=10, algorithm="sirt", alignment_algorithm="a
 
     with h5py.File(fn, "a") as f:
         proj = np.copy(f["/reconstruction/recon/proj"][:, el_ind, :, :])
-        proj = np.swapaxes(proj, 1, 2)
+        # proj = np.swapaxes(proj, 1, 2)
         th = np.copy(f["/exchange/theta"])
         aligned_proj, shift_y, shift_x, err = alignment_func(
-            proj, np.deg2rad(th), iters=iters, algorithm=algorithm
+            proj, np.deg2rad(th), iters=iters, algorithm=algorithm, center=center, save=save
         )
 
         # Write shift
@@ -978,8 +1126,9 @@ def find_center(fn, el, *, path="."):
         # proj = np.swapaxes(proj, 1, 2)
         th = np.deg2rad(np.copy(f["/exchange/theta"]))
 
-        guess = proj.shape[2] / 2
-        print(guess)
+        proj_width = proj.shape[2]
+        guess = proj_width / 2
+        print(f"Guess for the center of rotation (half-width): {guess}")
         rot_center = tomopy.find_center(proj, th, init=guess, ind=0, tol=0.5)
 
         # Write center
@@ -990,7 +1139,7 @@ def find_center(fn, el, *, path="."):
             dset[...] = rot_center
 
     print(f"Center of rotation found at {rot_center}")
-
+    return rot_center, proj_width
 
 def make_volume(fn, *, path=".", algorithm="gridrec", rotation_center=None):
     """
