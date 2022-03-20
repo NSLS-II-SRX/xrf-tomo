@@ -1025,6 +1025,24 @@ def normalize_projections(fn, *, path=".", normalize_by_element=None):
             dset[:, i, :, :] = Inorm
 
 
+def _shift_images(image_stack, *, dx, dy):
+    """
+    Shift stack of images.
+
+    Parameters
+    ----------
+    image_stack: np.ndarray
+        Stack of images, represented as a numpy array. Shape: ``(nimages, ny, nx)``.
+    dx: np.ndarray or list
+        Shift along horizontal axis of the image (typically fast axis). Shape: ``(nimages,)``.
+        Positive values shift images to the left.
+    dy: np.ndarray or list
+        Shift along vertical axis of the image (typically slow axis). Shape: ``(nimages,)``.
+        Positive values shift images up.
+    """
+    return tomopy.prep.alignment.shift_images(image_stack, dy, dx)
+
+
 def shift_projections(fn, *, path=".", read_only=True):
 
     path = _process_dir(path)
@@ -1044,7 +1062,7 @@ def shift_projections(fn, *, path=".", read_only=True):
 
         for i in range(N):
             II = proj[:, i, :, :]
-            shift_proj = tomopy.prep.alignment.shift_images(II, dy, dx)
+            shift_proj = _shift_images(II, dx=dx, dy=dy)
             proj[:, i, :, :] = shift_proj
 
     if read_only:
