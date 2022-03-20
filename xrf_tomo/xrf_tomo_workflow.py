@@ -124,7 +124,7 @@ if True or version.parse(tomopy.__version__) < version.parse("1.11.0"):
             # Reconstruct image.
             rec = tomopy.recon(prj, ang, center=center, algorithm=algorithm)
 
-            rec = np.clip(rec, a_min=0, a_max=None)  # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            # rec = np.clip(rec, a_min=0, a_max=None)  # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
             # Re-project data and obtain simulated data.
             sim = tomopy.project(rec, ang, center=center, pad=False)
@@ -145,13 +145,9 @@ if True or version.parse(tomopy.__version__) < version.parse("1.11.0"):
 
                 # Register current projection in sub-pixel precision
                 shift, error, diffphase = phase_cross_correlation(
-                    _prj[m], _sim[m], upsample_factor=upsample_factor
+                    _prj[m], _sim[m], upsample_factor=100  # upsample_factor=upsample_factor
                 )
                 err[m] = np.sqrt(shift[0] * shift[0] + shift[1] * shift[1])
-
-                shift[0] = 0  ##
-                shift[1] = 0  ##
-                print(f"shift: {shift} {shift[1]} {shift[0]}")  ##
 
                 sx[m] += shift[0]
                 sy[m] += shift[1]
@@ -168,19 +164,28 @@ if True or version.parse(tomopy.__version__) < version.parse("1.11.0"):
                 write_tiff(prj, fdir + "/tmp/iters/prj", n)
                 write_tiff(sim, fdir + "/tmp/iters/sim", n)
                 write_tiff(rec, fdir + "/tmp/iters/rec", n)
-                write_tiff(_prj, fdir + "/tmp/iters/_prj", n)  ##
-                write_tiff(_sim, fdir + "/tmp/iters/_sim", n)  ##
+                write_tiff(_prj, fdir + "/tmp/iters/_prj", n)  # Change
+                write_tiff(_sim, fdir + "/tmp/iters/_sim", n)  # Change
 
         # Re-normalize data
         prj *= scl
         return prj, sx, sy, conv
 
-
-    def align_joint(
-            prj, ang, fdir='.', iters=10, pad=(0, 0),
-            blur=True, center=None, algorithm='sirt',
-            upsample_factor=10, rin=0.5, rout=0.8,
-            save=False, debug=True):
+    def align_joint(  # noqa: F811
+        prj,
+        ang,
+        fdir=".",
+        iters=10,
+        pad=(0, 0),
+        blur=True,
+        center=None,
+        algorithm="sirt",
+        upsample_factor=10,
+        rin=0.5,
+        rout=0.8,
+        save=False,
+        debug=True,
+    ):
         """
         Aligns the projection image stack using the joint
         re-projection algorithm :cite:`Gursoy:17`.
@@ -254,14 +259,14 @@ if True or version.parse(tomopy.__version__) < version.parse("1.11.0"):
 
         # Pad images.
         npad = ((0, 0), (pad[1], pad[1]), (pad[0], pad[0]))
-        prj = np.pad(prj, npad, mode='constant', constant_values=0)
+        prj = np.pad(prj, npad, mode="constant", constant_values=0)
 
         # Initialization of reconstruction.
         rec = 1e-12 * np.ones((prj.shape[1], prj.shape[2], prj.shape[2]))
 
         extra_kwargs = {}
-        if algorithm != 'gridrec':
-            extra_kwargs['num_iter'] = 1
+        if algorithm != "gridrec":
+            extra_kwargs["num_iter"] = 1
 
         # Register each image frame-by-frame.
         for n in range(iters):
@@ -270,8 +275,7 @@ if True or version.parse(tomopy.__version__) < version.parse("1.11.0"):
                 _rec = rec
 
             # Reconstruct image.
-            rec = tomopy.recon(prj, ang, center=center, algorithm=algorithm,
-                               init_recon=_rec, **extra_kwargs)
+            rec = tomopy.recon(prj, ang, center=center, algorithm=algorithm, init_recon=_rec, **extra_kwargs)
 
             # Re-project data and obtain simulated data.
             sim = tomopy.project(rec, ang, center=center, pad=False)
@@ -292,8 +296,9 @@ if True or version.parse(tomopy.__version__) < version.parse("1.11.0"):
 
                 # Register current projection in sub-pixel precision
                 shift, error, diffphase = phase_cross_correlation(
-                        _prj[m], _sim[m], upsample_factor=upsample_factor)
-                err[m] = np.sqrt(shift[0]*shift[0] + shift[1]*shift[1])
+                    _prj[m], _sim[m], upsample_factor=upsample_factor
+                )
+                err[m] = np.sqrt(shift[0] * shift[0] + shift[1] * shift[1])
                 sx[m] += shift[0]
                 sy[m] += shift[1]
 
@@ -302,13 +307,15 @@ if True or version.parse(tomopy.__version__) < version.parse("1.11.0"):
                 prj[m] = tf.warp(prj[m], tform, order=5)
 
             if debug:
-                print('iter=' + str(n) + ', err=' + str(np.linalg.norm(err)))
+                print("iter=" + str(n) + ", err=" + str(np.linalg.norm(err)))
                 conv[n] = np.linalg.norm(err)
 
             if save:
-                write_tiff(prj, 'tmp/iters/prj', n)
-                write_tiff(sim, 'tmp/iters/sim', n)
-                write_tiff(rec, 'tmp/iters/rec', n)
+                write_tiff(prj, fdir + "tmp/iters/prj", n)
+                write_tiff(sim, fdir + "tmp/iters/sim", n)
+                write_tiff(rec, fdir + "tmp/iters/rec", n)
+                write_tiff(_prj, fdir + "/tmp/iters/_prj", n)  # Change
+                write_tiff(_sim, fdir + "/tmp/iters/_sim", n)  # Change
 
         # Re-normalize data
         prj *= scl
@@ -921,7 +928,9 @@ def find_element(el, *, elements, select_all_elements="all"):
     return el_ind
 
 
-def find_alignment(fn, el, *, iters=10, algorithm="sirt", center=None, save=False, alignment_algorithm="align_seq", path="."):
+def find_alignment(
+    fn, el, *, iters=10, algorithm="sirt", center=None, save=False, alignment_algorithm="align_seq", path="."
+):
     """
     Parameters
     ----------
@@ -1035,7 +1044,7 @@ def shift_projections(fn, *, path=".", read_only=True):
 
         for i in range(N):
             II = proj[:, i, :, :]
-            shift_proj = tomopy.prep.alignment.shift_images(II, dx, dy)
+            shift_proj = tomopy.prep.alignment.shift_images(II, dy, dx)
             proj[:, i, :, :] = shift_proj
 
     if read_only:
@@ -1140,6 +1149,7 @@ def find_center(fn, el, *, path="."):
 
     print(f"Center of rotation found at {rot_center}")
     return rot_center, proj_width
+
 
 def make_volume(fn, *, path=".", algorithm="gridrec", rotation_center=None):
     """
