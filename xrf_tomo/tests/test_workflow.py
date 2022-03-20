@@ -82,9 +82,11 @@ def _create_test_hdf(fn, *, params):
 
 
 def test_shift_projections_01(tmpdir):
+    """
+    ``shift_projection``: basic test
+    """
+    shifts = [(0, 0), (-1, 1), (1, 0), (0, 1), (1, -1)]
 
-    # shifts = [(0, 0), (-1, 1), (1, 0), (0, 1), (1, -1)]
-    shifts = [(0, 0), (1, 0)]
     # Arrays of shift values
     dx = np.array([_[0] for _ in shifts])
     dy = np.array([_[1] for _ in shifts])
