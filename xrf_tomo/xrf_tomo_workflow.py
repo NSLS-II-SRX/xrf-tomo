@@ -1040,7 +1040,7 @@ def _shift_images(image_stack, *, dx, dy):
         Shift along vertical axis of the image (typically slow axis). Shape: ``(nimages,)``.
         Positive values shift images up.
     """
-    return tomopy.prep.alignment.shift_images(image_stack, dy, dx)
+    return tomopy.prep.alignment.shift_images(np.copy(image_stack), dy, dx)
 
 
 def shift_projections(fn, *, path=".", read_only=True):
