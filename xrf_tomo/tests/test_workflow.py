@@ -4,7 +4,7 @@ import numpy.testing as npt
 import os
 import pytest
 
-from xrf_tomo.xrf_tomo_workflow import _shift_images, shift_projections
+from xrf_tomo.xrf_tomo_workflow import _shift_images, shift_projections  # , find_alignment
 
 _image_shift_images = np.zeros([5, 7])
 _image_shift_images[1:4, 2:5] = 1
@@ -77,6 +77,8 @@ def _create_test_hdf(fn, *, params):
             elif k == "elements":
                 elements = np.array([_.encode() for _ in v])
                 f.create_dataset("/reconstruction/fitting/elements", data=elements)
+            elif k == "theta":
+                f.create_dataset("/exchange/theta", data=v)
             else:
                 assert False, f"Unknown keyword {k!r}"
 
@@ -93,7 +95,7 @@ def test_shift_projections_01(tmpdir):
 
     # Generate the stack of images
     img = np.array(_image_shift_images)
-    imgs = np.zeros([len(shifts), 1, *img.shape])
+    imgs = np.zeros([len(shifts), 1, *img.shape])  # Only ONE element
     for n in range(len(shifts)):
         imgs[n] = np.copy(img)
     imgs_shifted = np.zeros(imgs.shape)
@@ -121,5 +123,71 @@ def test_shift_projections_01(tmpdir):
         npt.assert_almost_equal(f["reconstruction"]["recon"]["proj"], imgs)
 
 
-def test_alignment_01(tmpdir):
-    pass
+# @pytest.fixture
+# def change_test_dir(tmpdir):
+#     wd = os.getcwd()
+#     os.chdir(tmpdir)
+#     yield tmpdir
+#     os.chdir(wd)
+
+
+# def test_alignment_01(change_test_dir):
+
+#     tmpdir = change_test_dir
+
+#     rot_center = 350
+#     radius = 150
+#     width = rot_center * 2 + 1
+
+#     # _image_alignment = np.zeros([51, width])
+#     _image_alignment = np.zeros([1, width])
+#     for n in range(width):
+#         d = n - rot_center
+#         if abs(d) <= radius:
+#             v = 2 * np.sqrt(radius ** 2 - d ** 2)
+#             # _image_alignment[20:31, n] = v
+#             _image_alignment[0, n] = v
+
+#     shift = (0, 0)
+
+#     theta = np.array(range(180), dtype=np.float32)
+#     n_proj = len(theta)
+
+#     n_proj_shifted = -2
+#     dx, dy = np.zeros([n_proj]), np.zeros([n_proj])
+#     dx[n_proj_shifted] = shift[0]
+#     dy[n_proj_shifted] = shift[1]
+
+#     print(f"image_alignment={_image_alignment}")
+
+#     # Generate the stack of images
+#     img = np.array(_image_alignment)
+#     imgs = np.zeros([n_proj, 1, *img.shape])  # Only ONE element
+#     for n in range(n_proj):
+#         imgs[n] = np.copy(img)
+#     imgs_shifted = np.copy(imgs)
+#     # imgs_shifted = np.zeros(imgs.shape)
+#     # imgs_shifted[:, 0, :, :] = _shift_images(imgs[:, 0, :, :], dx=-dx, dy=-dy)
+
+#     params = {}
+#     params["recon_proj"] = imgs_shifted
+#     params["elements"] = ["total_cnt"]
+#     params["theta"] = theta
+
+#     fn_hdf = os.path.join(tmpdir, "single_hdf.h5")
+#     _create_test_hdf(fn_hdf, params=params)
+
+#     find_alignment(
+#         fn_hdf, "total_cnt", iters=10, algorithm="gridrec",
+#         center=None, alignment_algorithm="align_seq", save=True
+#     )
+#     shift_projections(fn_hdf, read_only=False)
+
+#     with h5py.File(fn_hdf, "r") as f:
+#         print(f'{np.array(f["reconstruction"]["recon"]["proj"])[n_proj_shifted, 0, :, :]}')
+#         print(f"{imgs[n_proj_shifted, 0, :, :]}")
+#         print(f'dx={np.array(f["reconstruction"]["recon"]["del_x"])}')
+#         print(f'dy={np.array(f["reconstruction"]["recon"]["del_y"])}')
+#         npt.assert_almost_equal(f["reconstruction"]["recon"]["proj"], imgs)
+
+#     # assert False

@@ -24,6 +24,7 @@ from pyxrf.core.utils import convert_time_from_nexus_string
 default_log_file_name = "tomo_info.dat"
 
 
+# For now we are always using the alignment routines defined in the code.
 if True or version.parse(tomopy.__version__) < version.parse("1.11.0"):
 
     from tomopy.util.misc import write_tiff
