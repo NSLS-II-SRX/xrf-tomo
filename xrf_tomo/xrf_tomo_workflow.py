@@ -124,8 +124,7 @@ if True or version.parse(tomopy.__version__) < version.parse("1.11.0"):
         for n in range(iters):
             # Reconstruct image.
             rec = tomopy.recon(prj, ang, center=center, algorithm=algorithm)
-
-            # rec = np.clip(rec, a_min=0, a_max=None)  # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            rec = np.clip(rec, a_min=0, a_max=None)
 
             # Re-project data and obtain simulated data.
             sim = tomopy.project(rec, ang, center=center, pad=False)
@@ -146,7 +145,7 @@ if True or version.parse(tomopy.__version__) < version.parse("1.11.0"):
 
                 # Register current projection in sub-pixel precision
                 shift, error, diffphase = phase_cross_correlation(
-                    _prj[m], _sim[m], upsample_factor=100  # upsample_factor=upsample_factor
+                    _prj[m], _sim[m], upsample_factor=upsample_factor
                 )
                 err[m] = np.sqrt(shift[0] * shift[0] + shift[1] * shift[1])
 
