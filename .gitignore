@@ -83,3 +83,6 @@ target/
 
 # pytest-xprocess
 .xprocess/
+
+# Temporary directories
+tmp/

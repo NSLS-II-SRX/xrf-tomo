@@ -21,7 +21,11 @@ from pyxrf.api_dev import make_hdf, dask_client_create, fit_pixel_data_and_save
 from pyxrf.core.utils import convert_time_from_nexus_string
 
 
-if version.parse(tomopy.__version__) < version.parse("1.11.0"):
+default_log_file_name = "tomo_info.dat"
+
+
+# For now we are always using the alignment routines defined in the code.
+if True or version.parse(tomopy.__version__) < version.parse("1.11.0"):
 
     from tomopy.util.misc import write_tiff
 
@@ -120,6 +124,158 @@ if version.parse(tomopy.__version__) < version.parse("1.11.0"):
         for n in range(iters):
             # Reconstruct image.
             rec = tomopy.recon(prj, ang, center=center, algorithm=algorithm)
+            rec = np.clip(rec, a_min=0, a_max=None)
+
+            # Re-project data and obtain simulated data.
+            sim = tomopy.project(rec, ang, center=center, pad=False)
+
+            # Blur edges.
+            if blur:
+                _prj = tomopy.blur_edges(prj, rin, rout)
+                _sim = tomopy.blur_edges(sim, rin, rout)
+            else:
+                _prj = prj
+                _sim = sim
+
+            # Initialize error matrix per iteration.
+            err = np.zeros((prj.shape[0]))
+
+            # For each projection
+            for m in range(prj.shape[0]):
+
+                # Register current projection in sub-pixel precision
+                shift, error, diffphase = phase_cross_correlation(
+                    _prj[m], _sim[m], upsample_factor=upsample_factor
+                )
+                err[m] = np.sqrt(shift[0] * shift[0] + shift[1] * shift[1])
+
+                sx[m] += shift[0]
+                sy[m] += shift[1]
+
+                # Register current image with the simulated one
+                tform = tf.SimilarityTransform(translation=(shift[1], shift[0]))
+                prj[m] = tf.warp(prj[m], tform, order=5)
+
+            if debug:
+                print("iter=" + str(n) + ", err=" + str(np.linalg.norm(err)))
+                conv[n] = np.linalg.norm(err)
+
+            if save:
+                write_tiff(prj, fdir + "/tmp/iters/prj", n)
+                write_tiff(sim, fdir + "/tmp/iters/sim", n)
+                write_tiff(rec, fdir + "/tmp/iters/rec", n)
+                write_tiff(_prj, fdir + "/tmp/iters/_prj", n)  # Change
+                write_tiff(_sim, fdir + "/tmp/iters/_sim", n)  # Change
+
+        # Re-normalize data
+        prj *= scl
+        return prj, sx, sy, conv
+
+    def align_joint(  # noqa: F811
+        prj,
+        ang,
+        fdir=".",
+        iters=10,
+        pad=(0, 0),
+        blur=True,
+        center=None,
+        algorithm="sirt",
+        upsample_factor=10,
+        rin=0.5,
+        rout=0.8,
+        save=False,
+        debug=True,
+    ):
+        """
+        Aligns the projection image stack using the joint
+        re-projection algorithm :cite:`Gursoy:17`.
+
+        Parameters
+        ----------
+        prj : ndarray
+            3D stack of projection images. The first dimension
+            is projection axis, second and third dimensions are
+            the x- and y-axes of the projection image, respectively.
+        ang : ndarray
+            Projection angles in radians as an array.
+        iters : scalar, optional
+            Number of iterations of the algorithm.
+        pad : list-like, optional
+            Padding for projection images in x and y-axes.
+        blur : bool, optional
+            Blurs the edge of the image before registration.
+        center: array, optional
+            Location of rotation axis.
+        algorithm : {str, function}
+            One of the following string values.
+
+            'art'
+                Algebraic reconstruction technique :cite:`Kak:98`.
+            'gridrec'
+                Fourier grid reconstruction algorithm :cite:`Dowd:99`,
+                :cite:`Rivers:06`.
+            'mlem'
+                Maximum-likelihood expectation maximization algorithm
+                :cite:`Dempster:77`.
+            'sirt'
+                Simultaneous algebraic reconstruction technique.
+            'tv'
+                Total Variation reconstruction technique
+                :cite:`Chambolle:11`.
+            'grad'
+                Gradient descent method with a constant step size
+
+        upsample_factor : integer, optional
+            The upsampling factor. Registration accuracy is
+            inversely propotional to upsample_factor.
+        rin : scalar, optional
+            The inner radius of blur function. Pixels inside
+            rin is set to one.
+        rout : scalar, optional
+            The outer radius of blur function. Pixels outside
+            rout is set to zero.
+        save : bool, optional
+            Saves projections and corresponding reconstruction
+            for each algorithm iteration.
+        debug : book, optional
+            Provides debugging info such as iterations and error.
+
+        Returns
+        -------
+        ndarray
+            3D stack of projection images with jitter.
+        ndarray
+            Error array for each iteration.
+        """
+
+        # Needs scaling for skimage float operations.
+        prj, scl = tomopy.prep.alignment.scale(prj)
+
+        # Shift arrays
+        sx = np.zeros((prj.shape[0]))
+        sy = np.zeros((prj.shape[0]))
+
+        conv = np.zeros((iters))
+
+        # Pad images.
+        npad = ((0, 0), (pad[1], pad[1]), (pad[0], pad[0]))
+        prj = np.pad(prj, npad, mode="constant", constant_values=0)
+
+        # Initialization of reconstruction.
+        rec = 1e-12 * np.ones((prj.shape[1], prj.shape[2], prj.shape[2]))
+
+        extra_kwargs = {}
+        if algorithm != "gridrec":
+            extra_kwargs["num_iter"] = 1
+
+        # Register each image frame-by-frame.
+        for n in range(iters):
+
+            if np.mod(n, 1) == 0:
+                _rec = rec
+
+            # Reconstruct image.
+            rec = tomopy.recon(prj, ang, center=center, algorithm=algorithm, init_recon=_rec, **extra_kwargs)
 
             # Re-project data and obtain simulated data.
             sim = tomopy.project(rec, ang, center=center, pad=False)
@@ -155,9 +311,11 @@ if version.parse(tomopy.__version__) < version.parse("1.11.0"):
                 conv[n] = np.linalg.norm(err)
 
             if save:
-                write_tiff(prj, fdir + "/tmp/iters/prj", n)
-                write_tiff(sim, fdir + "/tmp/iters/sim", n)
-                write_tiff(rec, fdir + "/tmp/iters/rec", n)
+                write_tiff(prj, fdir + "tmp/iters/prj", n)
+                write_tiff(sim, fdir + "tmp/iters/sim", n)
+                write_tiff(rec, fdir + "tmp/iters/rec", n)
+                write_tiff(_prj, fdir + "/tmp/iters/_prj", n)  # Change
+                write_tiff(_sim, fdir + "/tmp/iters/_sim", n)  # Change
 
         # Re-normalize data
         prj *= scl
@@ -196,7 +354,7 @@ def grab_proj(start, end=None, *, wd="."):
     make_hdf(start, end=end, wd=wd)
 
 
-def create_log_file(*, fn_log="tomo_info.dat", wd=".", hdf5_ext="h5"):
+def create_log_file(*, fn_log=default_log_file_name, wd=".", hdf5_ext="h5"):
     """
     Create log file ``fn`` based on the files contained in ``wd``. If ``fn``
     is a relative path, it is assumed that the root is in ``wd``.
@@ -318,7 +476,7 @@ def read_log_file(fn, *, wd="."):
 
 
 def process_proj(
-    *, wd=".", fn_param=None, fn_log="tomo_info.dat", ic_name="i0", save_tiff=False, skip_processed=False
+    *, wd=".", fn_param=None, fn_log=default_log_file_name, ic_name="i0", save_tiff=False, skip_processed=False
 ):
     """
     Process the projections. ``wd`` is the directory that contains raw .h5 files,
@@ -387,7 +545,7 @@ def process_proj(
 def make_single_hdf(
     fn,
     *,
-    fn_log="tomo_info.dat",
+    fn_log=default_log_file_name,
     wd_src=".",
     wd_dest=".",
     ic_name="i0",
@@ -770,7 +928,9 @@ def find_element(el, *, elements, select_all_elements="all"):
     return el_ind
 
 
-def find_alignment(fn, el, *, iters=10, algorithm="sirt", alignment_algorithm="align_seq", path="."):
+def find_alignment(
+    fn, el, *, iters=10, algorithm="sirt", center=None, save=False, alignment_algorithm="align_seq", path="."
+):
     """
     Parameters
     ----------
@@ -802,10 +962,10 @@ def find_alignment(fn, el, *, iters=10, algorithm="sirt", alignment_algorithm="a
 
     with h5py.File(fn, "a") as f:
         proj = np.copy(f["/reconstruction/recon/proj"][:, el_ind, :, :])
-        proj = np.swapaxes(proj, 1, 2)
+        # proj = np.swapaxes(proj, 1, 2)
         th = np.copy(f["/exchange/theta"])
         aligned_proj, shift_y, shift_x, err = alignment_func(
-            proj, np.deg2rad(th), iters=iters, algorithm=algorithm
+            proj, np.deg2rad(th), iters=iters, algorithm=algorithm, center=center, save=save
         )
 
         # Write shift
@@ -821,12 +981,25 @@ def find_alignment(fn, el, *, iters=10, algorithm="sirt", alignment_algorithm="a
             dset[...] = shift_y
 
 
-def normalize_projections(fn, *, path="."):
+def normalize_projections(fn, *, path=".", normalize_by_element=None):
+    """
+    normalize_by_element: str or None
+        Emission line (e.g. Ar_K) or None
+    """
 
     path = _process_dir(path)
     fn = _process_fn(fn, fn_dir=path)
 
     N = len(get_elements(fn, ret=True, path=path))
+
+    el_ind = None
+    if normalize_by_element:
+        elements = get_elements(fn, ret=True, path=path)
+        try:
+            el_ind = find_element(normalize_by_element, elements=elements)
+        except IndexError as ex:
+            print(f"Exception: {ex}.")
+            return
 
     with h5py.File(fn, "a") as f:
         proj = f["/reconstruction/fitting/data"]
@@ -839,11 +1012,35 @@ def normalize_projections(fn, *, path="."):
             dset = f["reconstruction"]["recon"]["proj"]
             dset[...] = proj
 
+        if el_ind is not None:
+            el_norm = dset[:, el_ind, :, :]
+
         for i in range(N):
             II = dset[:, i, :, :]
-            Inorm = II / i0
+            if el_ind:
+                Inorm = II / el_norm
+            else:
+                Inorm = II / i0
             Inorm = tomopy.misc.corr.remove_nan(Inorm, val=0)
             dset[:, i, :, :] = Inorm
+
+
+def _shift_images(image_stack, *, dx, dy):
+    """
+    Shift stack of images.
+
+    Parameters
+    ----------
+    image_stack: np.ndarray
+        Stack of images, represented as a numpy array. Shape: ``(nimages, ny, nx)``.
+    dx: np.ndarray or list
+        Shift along horizontal axis of the image (typically fast axis). Shape: ``(nimages,)``.
+        Positive values shift images to the left.
+    dy: np.ndarray or list
+        Shift along vertical axis of the image (typically slow axis). Shape: ``(nimages,)``.
+        Positive values shift images up.
+    """
+    return tomopy.prep.alignment.shift_images(np.copy(image_stack), dy, dx)
 
 
 def shift_projections(fn, *, path=".", read_only=True):
@@ -865,7 +1062,7 @@ def shift_projections(fn, *, path=".", read_only=True):
 
         for i in range(N):
             II = proj[:, i, :, :]
-            shift_proj = tomopy.prep.alignment.shift_images(II, dx, dy)
+            shift_proj = _shift_images(II, dx=dx, dy=dy)
             proj[:, i, :, :] = shift_proj
 
     if read_only:
@@ -956,8 +1153,9 @@ def find_center(fn, el, *, path="."):
         # proj = np.swapaxes(proj, 1, 2)
         th = np.deg2rad(np.copy(f["/exchange/theta"]))
 
-        guess = proj.shape[2] / 2
-        print(guess)
+        proj_width = proj.shape[2]
+        guess = proj_width / 2
+        print(f"Guess for the center of rotation (half-width): {guess}")
         rot_center = tomopy.find_center(proj, th, init=guess, ind=0, tol=0.5)
 
         # Write center
@@ -968,6 +1166,7 @@ def find_center(fn, el, *, path="."):
             dset[...] = rot_center
 
     print(f"Center of rotation found at {rot_center}")
+    return rot_center, proj_width
 
 
 def make_volume(fn, *, path=".", algorithm="gridrec", rotation_center=None):
