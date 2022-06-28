@@ -1,6 +1,7 @@
 import os
 
 import tomopy  # this is supposed to be imported before numpy
+from tomopy.util.misc import write_tiff
 from tomopy.prep.alignment import align_seq, align_joint
 
 import h5py
@@ -26,8 +27,6 @@ default_log_file_name = "tomo_info.dat"
 
 # For now we are always using the alignment routines defined in the code.
 if True or version.parse(tomopy.__version__) < version.parse("1.11.0"):
-
-    from tomopy.util.misc import write_tiff
 
     # Fix the bug for 'align_seq' in older versions of tomopy
     def align_seq(  # noqa: F811
@@ -678,6 +677,160 @@ def make_single_hdf(
                     f_i0[i, :, :] = tmp_f["xrfmap"]["scalers"]["val"][slice_vertical, slice_horizontal, scaler_ind]
 
 
+def align_com(
+    prj,
+    ang,
+    fdir=".",
+    iters=10,
+    pad=(0, 0),
+    blur=True,
+    center=None,
+    algorithm="sirt",
+    upsample_factor=10,
+    rin=0.5,
+    rout=0.8,
+    save=False,
+    debug=True,
+):
+    """
+    Aligns the projection image stack using the joint
+    re-projection algorithm :cite:`Gursoy:17`.
+
+    The difference from the original algorithm included in tomopy
+    is that it uses center of mass instead of cross-correlation to
+    align simulated projections.
+
+    Parameters
+    ----------
+    prj : ndarray
+        3D stack of projection images. The first dimension
+        is projection axis, second and third dimensions are
+        the x- and y-axes of the projection image, respectively.
+    ang : ndarray
+        Projection angles in radians as an array.
+    iters : scalar, optional
+        Number of iterations of the algorithm.
+    pad : list-like, optional
+        Padding for projection images in x and y-axes.
+    blur : bool, optional
+        Blurs the edge of the image before registration.
+    center: array, optional
+        Location of rotation axis.
+    algorithm : {str, function}
+        One of the following string values.
+
+        'art'
+            Algebraic reconstruction technique :cite:`Kak:98`.
+        'gridrec'
+            Fourier grid reconstruction algorithm :cite:`Dowd:99`,
+            :cite:`Rivers:06`.
+        'mlem'
+            Maximum-likelihood expectation maximization algorithm
+            :cite:`Dempster:77`.
+        'sirt'
+            Simultaneous algebraic reconstruction technique.
+        'tv'
+            Total Variation reconstruction technique
+            :cite:`Chambolle:11`.
+        'grad'
+            Gradient descent method with a constant step size
+
+    upsample_factor : integer, optional
+        The upsampling factor. Registration accuracy is
+        inversely propotional to upsample_factor.
+    rin : scalar, optional
+        The inner radius of blur function. Pixels inside
+        rin is set to one.
+    rout : scalar, optional
+        The outer radius of blur function. Pixels outside
+        rout is set to zero.
+    save : bool, optional
+        Saves projections and corresponding reconstruction
+        for each algorithm iteration.
+    debug : book, optional
+        Provides debugging info such as iterations and error.
+
+    Returns
+    -------
+    ndarray
+        3D stack of projection images with jitter.
+    ndarray
+        Error array for each iteration.
+    """
+
+    # Needs scaling for skimage float operations.
+    prj, scl = tomopy.scale(prj)
+
+    # Shift arrays
+    sx = np.zeros((prj.shape[0]))
+    sy = np.zeros((prj.shape[0]))
+
+    conv = np.zeros((iters))
+
+    # Pad images.
+    npad = ((0, 0), (pad[1], pad[1]), (pad[0], pad[0]))
+    prj = np.pad(prj, npad, mode="constant", constant_values=0)
+
+    # Initialization of reconstruction.
+    rec = 1e-12 * np.ones((prj.shape[1], prj.shape[2], prj.shape[2]))
+
+    extra_kwargs = {}
+    if algorithm != "gridrec":
+        extra_kwargs["num_iter"] = 1
+
+    # Register each image frame-by-frame.
+    for n in range(iters):
+
+        if np.mod(n, 1) == 0:
+            _rec = rec
+
+        # Reconstruct image.
+        rec = tomopy.recon(prj, ang, center=center, algorithm=algorithm, init_recon=_rec, **extra_kwargs)
+
+        # Re-project data and obtain simulated data.
+        sim = tomopy.project(rec, ang, center=center, pad=False)
+
+        # Blur edges.
+        if blur:
+            _prj = tomopy.blur_edges(prj, rin, rout)
+            _sim = tomopy.blur_edges(sim, rin, rout)
+        else:
+            _prj = prj
+            _sim = sim
+
+        # Initialize error matrix per iteration.
+        err = np.zeros((prj.shape[0]))
+
+        # For each projection
+        for m in range(prj.shape[0]):
+
+            # Register current projection in sub-pixel precision
+            com_proj = center_of_mass(_prj[m])
+            com_sim = center_of_mass(_sim[m])
+
+            shift = (com_proj[1] - com_sim[1], com_proj[0] - com_sim[0])
+            err[m] = np.sqrt(shift[0] * shift[0] + shift[1] * shift[1])
+            sx[m] += shift[0]
+            sy[m] += shift[1]
+
+            # Register current image with the simulated one
+            tform = tf.SimilarityTransform(translation=(shift[0], shift[1]))
+            prj[m] = tf.warp(prj[m], tform, order=5)
+
+        if debug:
+            print("iter=" + str(n) + ", err=" + str(np.linalg.norm(err)))
+            conv[n] = np.linalg.norm(err)
+
+        if save:
+            write_tiff(prj, "tmp/iters/prj", n)
+            write_tiff(sim, "tmp/iters/sim", n)
+            write_tiff(rec, "tmp/iters/rec", n)
+
+    # Re-normalize data
+    prj *= scl
+    return prj, sx, sy, conv
+
+
 def align_proj_com(fn, element="all", *, path="."):
     """
     Compute centers of mass of images and alignment ('delx' and 'dely') based on center of mass.
@@ -950,6 +1103,8 @@ def find_alignment(
         alignment_func = align_seq
     elif alignment_algorithm == "align_joint":
         alignment_func = align_joint
+    elif alignment_algorithm == "align_com":
+        alignment_func = align_com
     else:
         raise ValueError(f"Unsupported alignment algorithm: {alignment_algorithm!r}")
 
