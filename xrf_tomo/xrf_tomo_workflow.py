@@ -28,8 +28,6 @@ default_log_file_name = "tomo_info.dat"
 # For now we are always using the alignment routines defined in the code.
 if True or version.parse(tomopy.__version__) < version.parse("1.11.0"):
 
-    from tomopy.util.misc import write_tiff
-
     # Fix the bug for 'align_seq' in older versions of tomopy
     def align_seq(  # noqa: F811
         prj,
@@ -680,10 +678,20 @@ def make_single_hdf(
 
 
 def align_com(
-        prj, ang, fdir='.', iters=10, pad=(0, 0),
-        blur=True, center=None, algorithm='sirt',
-        upsample_factor=10, rin=0.5, rout=0.8,
-        save=False, debug=True):
+    prj,
+    ang,
+    fdir=".",
+    iters=10,
+    pad=(0, 0),
+    blur=True,
+    center=None,
+    algorithm="sirt",
+    upsample_factor=10,
+    rin=0.5,
+    rout=0.8,
+    save=False,
+    debug=True,
+):
     """
     Aligns the projection image stack using the joint
     re-projection algorithm :cite:`Gursoy:17`.
@@ -757,14 +765,14 @@ def align_com(
 
     # Pad images.
     npad = ((0, 0), (pad[1], pad[1]), (pad[0], pad[0]))
-    prj = np.pad(prj, npad, mode='constant', constant_values=0)
+    prj = np.pad(prj, npad, mode="constant", constant_values=0)
 
     # Initialization of reconstruction.
     rec = 1e-12 * np.ones((prj.shape[1], prj.shape[2], prj.shape[2]))
 
     extra_kwargs = {}
-    if algorithm != 'gridrec':
-        extra_kwargs['num_iter'] = 1
+    if algorithm != "gridrec":
+        extra_kwargs["num_iter"] = 1
 
     # Register each image frame-by-frame.
     for n in range(iters):
@@ -773,8 +781,7 @@ def align_com(
             _rec = rec
 
         # Reconstruct image.
-        rec = tomopy.recon(prj, ang, center=center, algorithm=algorithm,
-                    init_recon=_rec, **extra_kwargs)
+        rec = tomopy.recon(prj, ang, center=center, algorithm=algorithm, init_recon=_rec, **extra_kwargs)
 
         # Re-project data and obtain simulated data.
         sim = tomopy.project(rec, ang, center=center, pad=False)
@@ -798,7 +805,7 @@ def align_com(
             com_sim = center_of_mass(_sim[m])
 
             shift = (com_proj[1] - com_sim[1], com_proj[0] - com_sim[0])
-            err[m] = np.sqrt(shift[0]*shift[0] + shift[1]*shift[1])
+            err[m] = np.sqrt(shift[0] * shift[0] + shift[1] * shift[1])
             sx[m] += shift[0]
             sy[m] += shift[1]
 
@@ -807,13 +814,13 @@ def align_com(
             prj[m] = tf.warp(prj[m], tform, order=5)
 
         if debug:
-            print('iter=' + str(n) + ', err=' + str(np.linalg.norm(err)))
+            print("iter=" + str(n) + ", err=" + str(np.linalg.norm(err)))
             conv[n] = np.linalg.norm(err)
 
         if save:
-            write_tiff(prj, 'tmp/iters/prj', n)
-            write_tiff(sim, 'tmp/iters/sim', n)
-            write_tiff(rec, 'tmp/iters/rec', n)
+            write_tiff(prj, "tmp/iters/prj", n)
+            write_tiff(sim, "tmp/iters/sim", n)
+            write_tiff(rec, "tmp/iters/rec", n)
 
     # Re-normalize data
     prj *= scl
