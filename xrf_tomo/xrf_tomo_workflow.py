@@ -696,6 +696,10 @@ def align_com(
     Aligns the projection image stack using the joint
     re-projection algorithm :cite:`Gursoy:17`.
 
+    The difference from the original algorithm included in tomopy
+    is that it uses center of mass instead of cross-correlation to
+    align simulated projections.
+
     Parameters
     ----------
     prj : ndarray
