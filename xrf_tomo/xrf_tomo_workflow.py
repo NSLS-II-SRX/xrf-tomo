@@ -334,6 +334,12 @@ def _process_fn(fn, *, fn_dir="."):
     fn = os.path.normpath(fn)
     return fn
 
+def nor_data(img):
+    mean_tmp = np.mean(img)
+    std_tmp = np.std(img)
+    img = (img - mean_tmp) / std_tmp
+    img = (img - img.min()) / (img.max() - img.min())
+    return img
 
 def _process_dir(fn_dir="."):
     """
@@ -1364,6 +1370,7 @@ def make_volume(fn, *, path=".", algorithm="gridrec", rotation_center=None):
                 continue
 
             el_proj = proj[:, i, :, :]
+            el_proj = nor_data(proj)
             # el_proj = np.swapaxes(np.copy(el_proj), 1, 2)
             el_recon = tomopy.recon(el_proj, th, center=rot_center, algorithm=algorithm, sinogram_order=False)
             el_recon = np.clip(el_recon, a_min=0, a_max=None)
@@ -1443,6 +1450,7 @@ def make_volume_svmbir(
                 continue
 
             el_proj = proj[:, i, :, :]
+            el_proj = nor_data(el_proj)
             # el_proj = np.swapaxes(np.copy(el_proj), 1, 2)
             el_recon = svmbir.recon(
                 el_proj,
