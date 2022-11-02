@@ -1180,6 +1180,32 @@ def normalize_projections(fn, *, path=".", normalize_by_element=None):
             dset[:, i, :, :] = Inorm
 
 
+def normalize_pixel_range(fn, *, path=".", read_only=True):
+    """
+    Normalize each projection so that pixel values are in the range 0..1
+    """
+    path = _process_dir(path)
+    fn = _process_fn(fn, fn_dir=path)
+
+    N = len(get_elements(fn, ret=True, path=path))
+
+    with h5py.File(fn, "a") as f:
+        if read_only:
+            proj = np.copy(f["/reconstruction/recon/proj"])
+        else:
+            proj = f["/reconstruction/recon/proj"]
+
+        for i in range(N):
+            II = proj[:, i, :, :]
+            II_min = np.min(II)
+            II_max = np.max(II)
+            dII = np.max([II_max - II_min, 1e-30])
+            proj[:, i, :, :] = (II - II_min) / dII
+
+    if read_only:
+        return proj
+
+
 def _shift_images(image_stack, *, dx, dy):
     """
     Shift stack of images.

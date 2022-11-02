@@ -4,7 +4,7 @@ import numpy.testing as npt
 import os
 import pytest
 
-from xrf_tomo.xrf_tomo_workflow import _shift_images, shift_projections  # , find_alignment
+from xrf_tomo.xrf_tomo_workflow import _shift_images, shift_projections, normalize_pixel_range  # , find_alignment
 
 _image_shift_images = np.zeros([5, 7])
 _image_shift_images[1:4, 2:5] = 1
@@ -123,12 +123,81 @@ def test_shift_projections_01(tmpdir):
         npt.assert_almost_equal(f["reconstruction"]["recon"]["proj"], imgs)
 
 
-# @pytest.fixture
-# def change_test_dir(tmpdir):
-#     wd = os.getcwd()
-#     os.chdir(tmpdir)
-#     yield tmpdir
-#     os.chdir(wd)
+@pytest.fixture
+def change_test_dir(tmpdir):
+    wd = os.getcwd()
+    os.chdir(tmpdir)
+    yield tmpdir
+    os.chdir(wd)
+
+
+def test_normalize_pixel_range_01(change_test_dir):
+    """
+    'normalize_pixel_range_01'
+    """
+    tmpdir = change_test_dir
+
+    v_min, v_max = 0.7, 5.6
+    n_proj = 10
+    dx = np.zeros([n_proj])
+    dy = np.zeros([n_proj])
+
+    elements = ["total_cnt", "Ca_K"]
+    n_el = len(elements)
+
+    # Generate the stack of images
+    img = np.array(_image_shift_images) * (v_max - v_min) + v_min
+    imgs = np.zeros([n_proj, n_el, *img.shape])  # Only ONE element
+    for n in range(n_proj):
+        imgs[n] = np.copy(img)
+
+    params = {}
+    params["recon_proj"] = imgs
+    params["recon_del_x"] = dx
+    params["recon_del_y"] = dy
+    params["elements"] = ["total_cnt", "Ca_K"]
+
+    n_el = len(params["elements"])
+
+    fn_hdf = os.path.join(tmpdir, "single_hdf.h5")
+    _create_test_hdf(fn_hdf, params=params)
+
+    with h5py.File(fn_hdf, "r") as f:
+        npt.assert_almost_equal(f["reconstruction"]["recon"]["proj"], imgs)
+        npt.assert_almost_equal(f["reconstruction"]["recon"]["del_x"], dx)
+        npt.assert_almost_equal(f["reconstruction"]["recon"]["del_y"], dy)
+
+    with h5py.File(fn_hdf, "r") as f:
+        proj = np.copy(f["/reconstruction/recon/proj"])
+
+    assert proj.shape[0] == n_proj, proj.shape
+    assert proj.shape[1] == n_el, proj.shape
+    npt.assert_almost_equal(np.min(proj), v_min)
+    npt.assert_almost_equal(np.max(proj), v_max)
+
+    proj_norm = normalize_pixel_range("single_hdf.h5", path=tmpdir, read_only=True)
+
+    assert proj_norm.shape[0] == n_proj, proj_norm.shape
+    assert proj_norm.shape[1] == n_el, proj_norm.shape
+    npt.assert_almost_equal(np.min(proj_norm), 0.0)
+    npt.assert_almost_equal(np.max(proj_norm), 1.0)
+
+    normalize_pixel_range("single_hdf.h5", path=tmpdir, read_only=False)
+
+    with h5py.File(fn_hdf, "r") as f:
+        proj_norm2 = np.copy(f["/reconstruction/recon/proj"])
+
+    assert proj_norm2.shape[0] == n_proj, proj_norm2.shape
+    assert proj_norm2.shape[1] == n_el, proj_norm2.shape
+    npt.assert_almost_equal(np.min(proj_norm2), 0.0)
+    npt.assert_almost_equal(np.max(proj_norm2), 1.0)
+
+    npt.assert_almost_equal(proj_norm2, proj_norm)
+
+    for n in range(n_el):
+        for m in range(n_proj):
+            npt.assert_almost_equal(np.min(proj_norm2[m, n, :, :]), 0.0)
+            npt.assert_almost_equal(np.max(proj_norm2[m, n, :, :]), 1.0)
 
 
 # def test_alignment_01(change_test_dir):
