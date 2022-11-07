@@ -1169,6 +1169,7 @@ def normalize_projections(fn, *, path=".", normalize_by_element=None):
 
         if el_ind is not None:
             el_norm = dset[:, el_ind, :, :]
+        print(f"el_ind={el_ind} i0={i0}")
 
         for i in range(N):
             II = dset[:, i, :, :]
