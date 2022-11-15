@@ -305,9 +305,6 @@ if True or version.parse(tomopy.__version__) < version.parse("1.11.0"):
                 tform = tf.SimilarityTransform(translation=(shift[1], shift[0]))
                 prj[m] = tf.warp(prj[m], tform, order=5)
 
-                if m < 5:  ##
-                    print(f"shift[{m}] = {shift}")  ##
-
             if debug:
                 print("iter=" + str(n) + ", err=" + str(np.linalg.norm(err)))
                 conv[n] = np.linalg.norm(err)
@@ -880,8 +877,8 @@ def align_proj_com(fn, el, *, path="."):
 
         # Calculate shift
         com = np.array(com)
-        delx = np.round(com[:, 1] - N_x/2)
-        dely = np.round(com[:, 0] - N_y/2)
+        delx = np.round(com[:, 1] - N_x / 2)
+        dely = np.round(com[:, 0] - N_y / 2)
 
         # Write shift
         try:
