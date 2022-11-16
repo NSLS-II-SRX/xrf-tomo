@@ -831,7 +831,7 @@ def align_com(
     return prj, sx, sy, conv
 
 
-def align_proj_com(fn, element="all", *, path="."):
+def align_proj_com(fn, el, *, path="."):
     """
     Compute centers of mass of images and alignment ('delx' and 'dely') based on center of mass.
     If ``fn`` is an absolute path, then ``path`` is ignored.
@@ -839,29 +839,23 @@ def align_proj_com(fn, element="all", *, path="."):
 
     fn = _process_fn(fn, fn_dir=path)
 
+    elements = get_elements(fn, ret=True, path=path)
+    try:
+        el_ind = find_element(el, elements=elements)
+    except IndexError as ex:
+        print(f"Exception: {ex}.")
+        return
+
     with h5py.File(fn, "r+") as f:
-        com = list([])
+        com = []
 
-        N_th = f["reconstruction"]["fitting"]["data"].shape[0]
-        N_el = f["reconstruction"]["fitting"]["data"].shape[1]
+        dset = f["reconstruction"]["recon"]["proj"][:, :, :, :]
+        N_th, N_el, N_y, N_x = dset.shape
+
         for i in range(N_th):
-            # Load an image
-            I_tmp = np.squeeze(f["reconstruction"]["fitting"]["data"][i, :, :, :])
-
             # Choose the element to look at
-            II = np.zeros(I_tmp.shape[1:])
-            if element == "all":
-                # then sum all
-                II = np.sum(I_tmp, axis=0)
-            else:
-                # look at only that element
-                for ii in range(N_el):
-                    if element in f["reconstruction"]["fitting"]["elements"][ii]:
-                        II = II + f["reconstruction"]["fitting"]["data"][i, ii, :, :]
-
-            # Normalize by i0
-            I0 = f["exchange"]["i0"][i]
-            If = II / I0
+            II = np.array(dset[i, el_ind, :, :])
+            If = np.squeeze(II)
 
             # need to remove any possible divide by zero, nan, inf conditions
             If = tomopy.misc.corr.remove_nan(If, val=0)
@@ -883,10 +877,8 @@ def align_proj_com(fn, element="all", *, path="."):
 
         # Calculate shift
         com = np.array(com)
-        x0 = If.shape[1] / 2
-        delx = -1 * np.round(com[:, 1] - x0)
-        y0 = If.shape[0] / 2
-        dely = 1 * np.round(com[:, 0] - y0)
+        delx = np.round(com[:, 1] - N_x / 2)
+        dely = np.round(com[:, 0] - N_y / 2)
 
         # Write shift
         try:
@@ -1195,12 +1187,13 @@ def normalize_pixel_range(fn, *, path=".", read_only=True):
         else:
             proj = f["/reconstruction/recon/proj"]
 
-        for i in range(N):
-            II = proj[:, i, :, :]
-            II_min = np.min(II)
-            II_max = np.max(II)
-            dII = np.max([II_max - II_min, 1e-30])
-            proj[:, i, :, :] = (II - II_min) / dII
+        for n in range(proj.shape[0]):
+            for i in range(N):
+                II = proj[n, i, :, :]
+                II_min = np.min(II)
+                II_max = np.max(II)
+                dII = np.max([II_max - II_min, 1e-30])
+                proj[n, i, :, :] = (II - II_min) / dII
 
     if read_only:
         return proj

@@ -16,6 +16,7 @@ from .xrf_tomo_workflow import (  # noqa: F401, E402
     find_element,
     find_alignment,
     normalize_projections,
+    normalize_pixel_range,
     shift_projections,
     find_center,
     make_volume,
