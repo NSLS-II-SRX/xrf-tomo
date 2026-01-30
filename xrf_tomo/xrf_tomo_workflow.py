@@ -462,15 +462,19 @@ def read_log_file(fn, *, wd="."):
     df = pd.read_csv(fn, sep=",")
 
     use = df["Use"]
+    # As of pandas 3.0, we can't modify the "Use" array in place if we are changing
+    # the dtype to bool. So make a new boolean array that will replace it.
+    use_array_bool = np.empty_like(use, dtype=bool)
     for n in range(len(use)):
         if isinstance(use[n], str):
             # Manually created config files may contain values in 'Use' column represented as strings.
             # Convert values in 'Use' column from strings ("x"/"0") to booleans
-            use[n] = True if (use[n] == "x") else False
+            use_array_bool[n] = True if (use[n] == "x") else False
         else:
             # Convert integers (1/0) to booleans
-            use[n] = bool(use[n])
+            use_array_bool[n] = bool(use[n])
 
+    df["Use"] = use_array_bool
     return df
 
 
